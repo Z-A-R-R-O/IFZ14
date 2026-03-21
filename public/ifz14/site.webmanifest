@@ -1,0 +1,17 @@
+{
+  "name": "InterFrost",
+  "short_name": "IFZ14",
+  "description": "IFZ14 system architecture. Observe. Calculate. Evolve.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/ifz14/ifz14-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

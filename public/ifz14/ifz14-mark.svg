@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="ifz14MarkTitle">
+  <title id="ifz14MarkTitle">IFZ14 mark</title>
+  <defs>
+    <linearGradient id="ifz14MarkGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.96" />
+      <stop offset="100%" stop-color="#8aa4ff" stop-opacity="0.88" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="40" fill="#040608" />
+  <path d="M128 28 206 72v112l-78 44-78-44V72l78-44Z" fill="none" stroke="url(#ifz14MarkGlow)" stroke-width="10" />
+  <path d="M84 91h88v18l-58 38h58v18H84v-18l58-38H84V91Z" fill="#f8fbff" />
+  <text x="128" y="202" fill="#9db5ff" font-family="Aquire, Oxanium, sans-serif" font-size="28" letter-spacing="8" text-anchor="middle">14</text>
+</svg>
