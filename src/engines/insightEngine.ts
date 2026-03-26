@@ -3,6 +3,7 @@ import { calculateScore } from './scoreEngine';
 import { detectPattern } from './patternEngine';
 import { calculateStreaks } from './streakEngine';
 import { assessRisk } from './riskEngine';
+import { compareSessionTiming } from './dwExtractors';
 
 /**
  * Insight Engine — Converts raw engine outputs into human-readable sentences.
@@ -51,7 +52,7 @@ export function generateInsights(entries: DailyEntry[]): Insight[] {
 
   // Deep work timing insight
   if (recent.length >= 3) {
-    const morningBetter = recent.filter(e => (e.dw1FocusQuality || 0) > (e.dw2FocusQuality || 0)).length;
+    const morningBetter = recent.filter(e => compareSessionTiming(e) > 0).length;
     if (morningBetter > recent.length * 0.7) {
       insights.push({ text: 'Deep work strongest in morning window', type: 'neutral' });
     } else if (morningBetter < recent.length * 0.3) {

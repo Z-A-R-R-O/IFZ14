@@ -1,4 +1,7 @@
 import type { DailyEntry, Suggestion, StreakData } from '../types';
+import { calculateScore } from './scoreEngine';
+import { getDeepWorkFocus } from './dwExtractors';
+import { getBodySignal, hasBodyRoutineConfigured } from './systemSignals';
 
 /**
  * Calculates Pearson correlation coefficient between two numeric arrays.
@@ -40,9 +43,9 @@ export function generateSuggestions(entries: DailyEntry[], streaks: StreakData):
   if (completed.length < 3) return [];
 
   // Data extraction for correlations
-  const scores = completed.map(e => e.averageScore || 0);
+  const scores = completed.map(e => calculateScore(e).score);
   const sleepHours = completed.map(e => e.totalSleepHours || 0);
-  const deepWorkFocus = completed.map(e => ((e.dw1FocusQuality || 0) + (e.dw2FocusQuality || 0)) / 2);
+  const deepWorkFocus = completed.map(e => getDeepWorkFocus(e));
   
   const wakeHours = completed.map(e => {
     if (!e.wakeTime) return 7;
@@ -71,19 +74,20 @@ export function generateSuggestions(entries: DailyEntry[], streaks: StreakData):
   }
 
   // ─── 2. Gym / Body Consistency ───
-  const recentGym = completed.slice(0, 5).filter(e => e.gymTraining === 'completed').length;
-  const gymVals = completed.map(e => e.gymTraining === 'completed' ? 1 : 0);
-  const gymCorr = calculateCorrelation(gymVals, scores);
-  const gymConf = calculateConfidence(completed.length, Math.abs(gymCorr || 0.3)); // assume baseline if 0 variance
-  const estimatedGymImpact = gymCorr > 0 ? Math.round(gymCorr * 100) : 15;
+  const trackedBodyEntries = completed.filter(hasBodyRoutineConfigured);
+  const recentBody = trackedBodyEntries.slice(0, 5).filter(e => getBodySignal(e) >= 60).length;
+  const bodyVals = completed.map(e => hasBodyRoutineConfigured(e) ? getBodySignal(e) / 100 : 0);
+  const bodyCorr = calculateCorrelation(bodyVals, scores);
+  const bodyConf = calculateConfidence(completed.length, Math.abs(bodyCorr || 0.3)); // assume baseline if 0 variance
+  const estimatedBodyImpact = bodyCorr > 0 ? Math.round(bodyCorr * 100) : 15;
   
-  if (recentGym === 0 && gymConf !== 'Low') {
+  if (recentBody === 0 && bodyConf !== 'Low') {
     suggestions.push({
-      id: 'gym_momentum',
-      message: 'Restore physical momentum. Structural decay detected from lack of Gym.',
-      impact: estimatedGymImpact,
+      id: 'body_momentum',
+      message: 'Restore body-system momentum. Physical compliance is no longer supporting your score.',
+      impact: estimatedBodyImpact,
       priority: streaks.gym === 0 ? 'high' : 'medium',
-      confidence: gymConf,
+      confidence: bodyConf,
       causalPath: 'Add Body Block → Restore Physical Baseline → Momentum ↑',
       actionType: 'add_block',
       actionPayload: { blockType: 'body' }
@@ -107,7 +111,7 @@ export function generateSuggestions(entries: DailyEntry[], streaks: StreakData):
       causalPath: 'Late Wake → Structural Delay → Score Collapse',
       // We don't have a direct "remove" wake block since wake is core, but we can suggest a template shift
       actionType: 'switch_template',
-      actionPayload: { systemType: 'execution' }
+      actionPayload: { systemType: 'domination' }
     });
   }
 
@@ -135,7 +139,7 @@ export function generateSuggestions(entries: DailyEntry[], streaks: StreakData):
   // ─── Phase 5: Reflection-Aware Filtering ───
   // Avoid wrong suggestions by checking structured reflection data
   const recentReflections = completed.slice(0, 5).map(e => e.dynamic_values?.reflection);
-  const recentFailures = recentReflections.filter(r => r?.deepWorkFailure).map(r => r!.deepWorkFailure);
+  const recentFailures = recentReflections.map(r => r?.primaryObstacle || r?.deepWorkFailure).filter(Boolean);
 
   const filteredSuggestions = suggestions.filter(s => {
     // If user's problem is DISTRACTION, don't suggest sleep improvements

@@ -44,14 +44,15 @@ export interface TemplateDefinition {
 }
 
 export interface DailyValues {
-  custom?: Record<string, string>;
+  custom?: Record<string, string | number | boolean>;
   modeName?: string;
   reflection?: ReflectionData;
+  bodyHabits?: Record<string, number | boolean | string>; // habitId → value
   [key: string]: any;
 }
 
 export interface ReflectionData {
-  // Legacy structured fields (kept for backward compat)
+  // ─── Legacy (backward compat) ───
   deepWork?: "All" | "Partial" | "None";
   tasks?: "Yes" | "Mostly" | "No";
   body?: "Yes" | "No";
@@ -68,6 +69,67 @@ export interface ReflectionData {
     taskId: string;
     reason: 'DISTRACTION' | 'OVERLOAD' | 'TIME' | 'UNCLEAR';
   };
+
+  // ─── Realistic Reflection (Phase 7) ───
+
+  // Q1: "Did you follow your planned structure today?"
+  planAdherence?: 'FULLY' | 'MOSTLY' | 'PARTIALLY' | 'NOT_AT_ALL';
+
+  // Q2: "What was your biggest obstacle?"
+  primaryObstacle?: 'DISTRACTION' | 'FATIGUE' | 'OVERLOAD' | 'UNCLEAR_PRIORITIES'
+                   | 'EXTERNAL_INTERRUPTION' | 'PROCRASTINATION' | 'NONE';
+
+  // Q3: "Rate your discipline today" (1-10)
+  disciplineScore?: number;
+
+  // Q4: "What was your single biggest win today?"
+  biggestWin?: string;
+
+  // Q5: "What would you change about today?"
+  wouldChange?: string;
+
+  // Q6: "Tomorrow's #1 non-negotiable"
+  tomorrowNonNegotiable?: string;
+}
+
+// ─── Body Habits (dynamic body tracking for Daily page) ───
+
+export interface BodyHabit {
+  id: string;
+  name: string;
+  type: 'toggle' | 'rating' | 'duration';
+  icon: string;
+  isActive: boolean;
+  order: number;
+}
+
+// ─── Biometrics (Separate Lab — not connected to scoring) ───
+
+export interface BiometricProfile {
+  heightCm: number;
+  weightKg: number;
+  age: number;
+  gender: 'male' | 'female';
+  activityLevel: 'sedentary' | 'light' | 'moderate' | 'active' | 'intense';
+  goalType: 'cut' | 'maintain' | 'bulk';
+  bodyFatPercent?: number;
+}
+
+export interface WeightLogEntry {
+  date: string;        // YYYY-MM-DD
+  weightKg: number;
+  bodyFatPercent?: number;
+  note?: string;
+}
+
+export interface WorkoutLogEntry {
+  date: string;
+  type: 'strength' | 'cardio' | 'flexibility' | 'sport' | 'other';
+  name: string;
+  durationMin: number;
+  intensity: number;   // 1-10
+  caloriesBurned?: number;
+  note?: string;
 }
 
 // ─── Daily Log Entry (maps to Template.md) ───
@@ -86,7 +148,8 @@ export interface DailyEntry {
   sleepTime?: string;
   wakeTime?: string;
   totalSleepHours?: number;
-  energyLevel?: number; // 1-10
+  efficiencyRating?: number; // 1-10 (self-rated efficiency)
+  energyLevel?: number; // @deprecated — use efficiencyRating (kept for backward compat)
 
   // 1. Wake Anchor
   actualWakeTime?: string;
@@ -296,18 +359,61 @@ export interface Insight {
   type: 'positive' | 'neutral' | 'warning';
 }
 
-export interface Suggestion {
+export type SuggestionTemplateSystem = 'domination' | 'balanced' | 'recovery' | 'execution';
+
+export interface SuggestionBase {
   id: string;
   message: string;
   impact: number;
   priority: 'high' | 'medium' | 'low';
-  actionType?: 'add_block' | 'switch_template' | 'adjust_weight' | 'remove_block';
-  actionPayload?: any;
-  
+
   // Phase 4 Causality Engine
   confidence: 'High' | 'Medium' | 'Low';
   causalPath?: string;
 }
+
+export interface SuggestionAddBlockAction {
+  actionType: 'add_block';
+  actionPayload: {
+    blockType: DayBlock['type'];
+    customName?: string;
+    customType?: CustomInputType;
+  };
+}
+
+export interface SuggestionSwitchTemplateAction {
+  actionType: 'switch_template';
+  actionPayload: {
+    systemType: SuggestionTemplateSystem;
+  };
+}
+
+export interface SuggestionAdjustWeightAction {
+  actionType: 'adjust_weight';
+  actionPayload: {
+    blockId: string;
+    newWeight: number;
+  };
+}
+
+export interface SuggestionRemoveBlockAction {
+  actionType: 'remove_block';
+  actionPayload: {
+    blockType: DayBlock['type'];
+  };
+}
+
+export interface SuggestionNoAction {
+  actionType?: undefined;
+  actionPayload?: undefined;
+}
+
+export type Suggestion =
+  | (SuggestionBase & SuggestionAddBlockAction)
+  | (SuggestionBase & SuggestionSwitchTemplateAction)
+  | (SuggestionBase & SuggestionAdjustWeightAction)
+  | (SuggestionBase & SuggestionRemoveBlockAction)
+  | (SuggestionBase & SuggestionNoAction);
 
 // ─── Helpers ───
 
@@ -322,7 +428,7 @@ export function createEmptyEntry(date: string, template?: DayTemplate): DailyEnt
     sleepTime: '',
     wakeTime: '',
     totalSleepHours: 0,
-    energyLevel: 5,
+    efficiencyRating: 0,
     actualWakeTime: '',
     sunlightExposure: false,
     hydration: false,
@@ -332,46 +438,46 @@ export function createEmptyEntry(date: string, template?: DayTemplate): DailyEnt
     jawlineWorkout: false,
     gymTraining: 'skipped',
     workoutType: [],
-    gymIntensity: 5,
-    energyAfterGym: 5,
+    gymIntensity: 0,
+    energyAfterGym: 0,
     bodyNotes: '',
     dw1PlannedTask: '',
     dw1ActualTask: '',
-    dw1FocusQuality: 5,
+    dw1FocusQuality: 0,
     dw1Interruptions: 0,
     dw1Output: '',
     dw1Notes: '',
     recoveryActivities: [],
-    mentalResetQuality: 5,
+    mentalResetQuality: 0,
     dw2PrimaryTask: '',
     dw2SecondaryTask: '',
-    dw2FocusQuality: 5,
+    dw2FocusQuality: 0,
     dw2Output: '',
     dw2Notes: '',
     flexAType: '',
     flexADuration: '',
-    flexAQuality: 5,
+    flexAQuality: 0,
     flexBType: '',
     flexBDuration: '',
     flexBOutput: '',
     productionOutput: '',
     productionType: [],
-    outputScore: 5,
-    goalProgress: 5,
+    outputScore: 0,
+    goalProgress: 0,
     dailyLessons: '',
     mistakesToday: '',
     whatWorkedWell: '',
     improvementForTomorrow: '',
     resetActivities: [],
-    recoveryScore: 5,
-    domainBody: 5,
-    domainMind: 5,
-    domainIntelligence: 5,
-    domainSkills: 5,
-    domainProduct: 5,
-    domainMoney: 5,
-    domainSocial: 5,
-    domainEnvironment: 5,
+    recoveryScore: 0,
+    domainBody: 0,
+    domainMind: 0,
+    domainIntelligence: 0,
+    domainSkills: 0,
+    domainProduct: 0,
+    domainMoney: 0,
+    domainSocial: 0,
+    domainEnvironment: 0,
     deepWorkScore: 0,
     physicalScore: 0,
     learningScore: 0,
@@ -451,6 +557,16 @@ export interface AutoDayPreFilled {
   deepWork?: { sessions: DeepWorkSession[] };
   production?: { target: number };
   custom?: Record<string, string | number | boolean>;
+}
+
+export interface AutoDayPrefillValues {
+  wake?: AutoDayPreFilled['wake'];
+  body?: AutoDayPreFilled['body'];
+  deepWork?: AutoDayPreFilled['deepWork'];
+  production?: AutoDayPreFilled['production'];
+  custom?: AutoDayPreFilled['custom'];
+  dwSessions?: Array<Partial<DeepWorkSession> & { quality?: number }>;
+  dwQualities?: number[];
 }
 
 export interface PredictedOutcome {

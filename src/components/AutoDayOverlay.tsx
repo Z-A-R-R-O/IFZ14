@@ -15,10 +15,10 @@ import { calculateStreaks } from '../engines/streakEngine';
 import { computeAllGoals } from '../engines/goalEngine';
 import SystemButton from './SystemButton';
 import AnimatedMetric from './AnimatedMetric';
-import type { DayTemplate, DailyEntry, TemplateDefinition, GoalWithComputed } from '../types';
+import type { AutoDayPrefillValues, DayBlock, DayTemplate, DailyEntry, GoalWithComputed, TemplateDefinition } from '../types';
 
 interface AutoDayOverlayProps {
-  onComplete: (template: DayTemplate, modeName: string, preFilled: any) => void;
+  onComplete: (template: DayTemplate, modeName: string, preFilled: AutoDayPrefillValues) => void;
   onCancel?: () => void;
 }
 
@@ -98,7 +98,10 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
 
         // --- PHASE 4: ADAPTATION ENGINE ---
         if (adaptationMode === 'auto') {
-           const currentTemplateDef = Object.values(BUILTIN_TEMPLATES).find((t: TemplateDefinition) => t.id === activeTemplateId) || customTemplates.find((t: TemplateDefinition) => t.id === activeTemplateId) || BUILTIN_TEMPLATES.balanced;
+           const currentTemplateDef =
+             Object.values(BUILTIN_TEMPLATES).find((t: TemplateDefinition) => t.id === activeTemplateId) ||
+             customTemplates.find((t: TemplateDefinition) => t.id === activeTemplateId) ||
+             BUILTIN_TEMPLATES.execution;
            const streaks = calculateStreaks(allCompleted);
            const suggestions = generateSuggestions(allCompleted, streaks);
            const adaptations = runAdaptation(suggestions, currentTemplateDef);
@@ -110,13 +113,13 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
                  if (targetTpl) {
                      plan.template = [...targetTpl.structure];
                      plan.modeName = targetTpl.name;
-                     plan.dayType = newSys.toUpperCase() as any;
+                     plan.dayType = newSys.toUpperCase() as typeof plan.dayType;
                  }
               }
 
               if (adaptations.blockAdjustments.added.length > 0) {
                  adaptations.blockAdjustments.added.forEach(add => {
-                    const newBlock: any = {
+                    const newBlock: DayBlock = {
                         id: `block-${Math.random().toString(36).substring(2, 9)}`,
                         type: add.blockType,
                         title: add.customName || add.blockType.toUpperCase(),
@@ -143,7 +146,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
   }, [allCompleted, tasks, goals, store, adaptationMode, activeTemplateId, customTemplates]);
 
   // ─── Handle question answers ───
-  const handleAnswer = (key: string, value: any) => {
+  const handleAnswer = (key: string, value: string | number) => {
     store.setUserInput(key, value);
     if (currentQ < store.questions.length - 1) {
       setTimeout(() => setCurrentQ(c => c + 1), 200);
@@ -178,7 +181,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
       quality: 0,
     }));
 
-    const preFilled = {
+    const preFilled: AutoDayPrefillValues = {
       dwSessions,
       dwQualities: dwSessions.map(() => 0),
     };

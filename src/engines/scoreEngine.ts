@@ -1,262 +1,506 @@
-import type { DailyEntry, ScoreResult, SystemState, ReflectionData, Task } from '../types';
+import type { BodyHabit, DailyEntry, DayBlock, ReflectionData, ScoreResult, SystemState, Task } from '../types';
 
 /**
- * Score Engine — Phase 5: The Truth Scoring Engine
- * 
- * SystemScore = Execution × 0.5  +  Condition × 0.2  +  Integrity × 0.3
- * 
- * Execution  = objective task completion (deep work, gym, production, custom blocks)
- * Condition  = contextual state (sleep, energy)
- * Integrity  = alignment between plan and reality, adjusted by structured reflection
+ * Adaptive Score Engine
+ *
+ * Principles:
+ * - No input -> 0
+ * - Fully honored structure -> can reach 100
+ * - Score adapts to the actual day structure and active body habits
+ * - Missing optional groups do not hard-zero the day; weights redistribute
  */
 
-// ─── Utility ───
+const BLOCK_WEIGHTS: Record<DayBlock['type'], number> = {
+  wake: 0.14,
+  body: 0.18,
+  deep_work: 0.34,
+  production: 0.2,
+  reflection: 0.14,
+  custom: 0.14,
+};
 
-function clamp(v: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, v));
+const GROUP_WEIGHTS = {
+  execution: 0.55,
+  condition: 0.2,
+  integrity: 0.25,
+} as const;
+
+type CompletionUnit = {
+  score: number;
+  active: boolean;
+};
+
+type BlockEvaluation = {
+  block: DayBlock;
+  completion: number;
+};
+
+export interface ScoreComputationOptions {
+  tasks?: Task[];
+  bodyHabits?: BodyHabit[];
 }
 
-// ─── Legacy Block Scorers (still used by Execution layer) ───
-
-function getWakeScore(entry: DailyEntry): number {
-  let score = 0;
-  if (entry.sunlightExposure) score += 3;
-  if (entry.hydration) score += 3;
-  score += (2 - (entry.morningDistraction || 0)) * 2;
-  return score;
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
-function getBodyScore(entry: DailyEntry): number {
-  let score = 0;
-  if (entry.gymTraining === 'completed') score += 4;
-  else if (entry.gymTraining === 'partial') score += 2;
-  if (entry.jawlineWorkout) score += 1;
-  score += ((entry.gymIntensity || 0) / 10) * 3;
-  score += ((entry.energyAfterGym || 0) / 10) * 2;
-  return Math.min(score, 10);
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-function getDeepWorkScore(entry: DailyEntry, tasks: Task[]): number {
-  if (entry.structure_snapshot?.length) {
-    const dwBlock = entry.structure_snapshot.find(b => b.type === 'deep_work');
-    const count = dwBlock?.dwCount || 2;
-    const sessions = entry.dynamic_values?.dwSessions || [];
-    let executionSum = 0;
-
-    for (let i = 0; i < count; i++) {
-        const session = sessions[i];
-        if (!session) continue;
-        const focus = session.focus || session.quality || 0;
-        
-        if (session.taskId && tasks.length > 0) {
-            const task = tasks.find((t: Task) => t.id === session.taskId);
-            if (task) {
-                const duration = session.duration || 60;
-                // execution += (session.focus / 100) * (session.duration / task.estimatedTime) -> capped logically
-                const ratio = Math.min(duration / Math.max(task.estimatedTime, 1), 1);
-                executionSum += (focus / 100) * ratio * 10; 
-                // multiplied by 10 to match block scale bounds inside calcExecution (0-10 max logic)
-            } else {
-                executionSum += focus / 10;
-            }
-        } else {
-             executionSum += focus / 10;
-        }
-    }
-    return count > 0 ? executionSum / count : 0;
-  }
-  // Legacy fallback
-  const dw1 = (entry.dw1FocusQuality || 0) * 0.5 + (2 - (entry.dw1Interruptions || 0)) * 1.5;
-  const dw2 = (entry.dw2FocusQuality || 0) * 0.5;
-  return Math.min((dw1 + dw2) / 2 + 2, 10);
+function toNumber(value: unknown): number {
+  return typeof value === 'number' ? value : Number(value) || 0;
 }
 
-function getProductionScore(entry: DailyEntry): number {
-  return ((entry.outputScore || 0) + (entry.goalProgress || 0)) / 2;
+function hasPositiveNumber(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-function getCustomBlockScore(entry: DailyEntry): number {
-  if (!entry.structure_snapshot || !entry.dynamic_values?.custom) return 0;
-  const customBlocks = entry.structure_snapshot.filter(b => b.type === 'custom');
-  if (customBlocks.length === 0) return 0;
+function sleepQuality(hours: number): number {
+  if (hours <= 0) return 0;
+  if (hours < 4) return clamp((hours / 4) * 0.35, 0, 0.35);
+  if (hours < 6) return 0.35 + ((hours - 4) / 2) * 0.3;
+  if (hours <= 8) return 0.65 + ((hours - 6) / 2) * 0.35;
+  if (hours <= 9) return 1;
+  if (hours <= 10.5) return 1 - ((hours - 9) / 1.5) * 0.12;
+  return 0.88;
+}
 
-  let total = 0;
-  customBlocks.forEach(block => {
-    const val = entry.dynamic_values?.custom?.[block.id];
-    if (typeof val === 'number') total += clamp(val, 0, 10);
-    else if (typeof val === 'boolean') total += val ? 10 : 0;
-    else if (val) total += 10;
+function weightedAverage(parts: Array<{ score: number; weight: number; active?: boolean }>): CompletionUnit {
+  let totalWeight = 0;
+  let earned = 0;
+
+  parts.forEach((part) => {
+    if (part.active === false) return;
+    totalWeight += part.weight;
+    earned += clamp(part.score, 0, 1) * part.weight;
   });
-  return total / customBlocks.length;
+
+  if (totalWeight <= 0) return { score: 0, active: false };
+  return { score: clamp(earned / totalWeight, 0, 1), active: true };
 }
 
-function getDomainAverage(entry: DailyEntry): number {
-  const domains = [
-    entry.domainBody || 0, entry.domainMind || 0, entry.domainIntelligence || 0,
-    entry.domainSkills || 0, entry.domainProduct || 0, entry.domainMoney || 0,
-    entry.domainSocial || 0, entry.domainEnvironment || 0,
+function normalizeToPercent(unit: CompletionUnit): number {
+  if (!unit.active) return 0;
+  return clamp(Math.round(unit.score * 100), 0, 100);
+}
+
+function normalizeBodyHabitType(value: unknown): BodyHabit['type'] {
+  if (typeof value === 'boolean') return 'toggle';
+  if (typeof value === 'number') return 'rating';
+  return 'duration';
+}
+
+function resolveTasks(options?: ScoreComputationOptions): Task[] {
+  return options?.tasks ?? [];
+}
+
+function inferBodyHabits(entry: DailyEntry): BodyHabit[] {
+  return Object.entries(entry.dynamic_values?.bodyHabits || {}).map(([id, value], index) => ({
+    id,
+    name: id,
+    type: normalizeBodyHabitType(value),
+    icon: '',
+    isActive: true,
+    order: index,
+  }));
+}
+
+function resolveBodyHabits(entry: DailyEntry, options?: ScoreComputationOptions): BodyHabit[] {
+  const configured = options?.bodyHabits?.filter((habit) => habit.isActive).sort((left, right) => left.order - right.order);
+  if (configured && configured.length > 0) return configured;
+  return inferBodyHabits(entry);
+}
+
+function getDeepWorkSessions(entry: DailyEntry) {
+  const sessions = entry.dynamic_values?.dwSessions;
+  if (Array.isArray(sessions) && sessions.length > 0) return sessions;
+
+  const legacySessions = [
+    {
+      id: 'legacy-dw-1',
+      taskTitle: entry.dw1ActualTask || entry.dw1PlannedTask || '',
+      focus: (entry.dw1FocusQuality || 0) * 10,
+      duration: 60,
+      status: (entry.dw1FocusQuality || 0) >= 4 ? 'done' : 'pending',
+    },
+    {
+      id: 'legacy-dw-2',
+      taskTitle: entry.dw2PrimaryTask || '',
+      focus: (entry.dw2FocusQuality || 0) * 10,
+      duration: 60,
+      status: (entry.dw2FocusQuality || 0) >= 4 ? 'done' : 'pending',
+    },
   ];
-  return domains.reduce((a, b) => a + b, 0) / domains.length;
+
+  const hasLegacyEvidence = legacySessions.some((session) => (session.focus || 0) > 0 || hasText(session.taskTitle));
+  return hasLegacyEvidence ? legacySessions : [];
 }
 
-// ═══════════════════════════════════════
-//  LAYER 1: EXECUTION SCORE (50%)
-//  What you objectively DID today
-// ═══════════════════════════════════════
+function inferStructure(entry: DailyEntry): DayBlock[] {
+  const blocks: DayBlock[] = [];
 
-export function calcExecution(entry: DailyEntry, tasks: Task[] = []): number {
-  if (entry.structure_snapshot?.length) {
-    // Dynamic block-weighted scoring
-    const weights: Record<string, number> = {
-      wake: 10, body: 15, deep_work: 25, production: 20, reflection: 5, custom: 5,
-    };
+  const hasWake = hasText(entry.actualWakeTime) || entry.sunlightExposure || entry.hydration || (entry.morningDistraction || 0) > 0;
+  const hasBodyLegacy =
+    entry.gymTraining === 'completed' ||
+    entry.gymTraining === 'partial' ||
+    entry.gymTraining === 'skipped' ||
+    entry.gymTraining === 'none' ||
+    entry.jawlineWorkout ||
+    hasPositiveNumber(entry.gymIntensity) ||
+    hasPositiveNumber(entry.energyAfterGym);
+  const hasBodyHabits = Object.keys(entry.dynamic_values?.bodyHabits || {}).length > 0;
+  const deepSessions = getDeepWorkSessions(entry);
+  const hasProduction = hasText(entry.productionOutput) || hasPositiveNumber(entry.outputScore) || hasPositiveNumber(entry.goalProgress);
+  const hasReflection = Object.keys((entry.dynamic_values?.reflection as ReflectionData | undefined) || {}).length > 0;
+  const customEntries = Object.keys(entry.dynamic_values?.custom || {});
 
-    let totalWeight = 0;
-    let earned = 0;
+  if (hasWake) blocks.push({ id: 'legacy-wake', type: 'wake', title: 'WAKE SYSTEM' });
+  if (hasBodyLegacy || hasBodyHabits) blocks.push({ id: 'legacy-body', type: 'body', title: 'BODY SYSTEM' });
+  if (deepSessions.length > 0) blocks.push({ id: 'legacy-dw', type: 'deep_work', title: 'DEEP WORK', dwCount: Math.max(2, deepSessions.length) });
+  if (hasProduction) blocks.push({ id: 'legacy-production', type: 'production', title: 'PRODUCTION' });
+  if (hasReflection) blocks.push({ id: 'legacy-reflection', type: 'reflection', title: 'REFLECTION' });
 
-    entry.structure_snapshot.forEach(block => {
-      let blockScore = 0;
-      const w = (weights[block.type] || 5) * (block.weight ?? 1);
+  customEntries.forEach((key) => {
+    blocks.push({ id: key, type: 'custom', title: key.toUpperCase(), customType: 'number' });
+  });
 
-      switch (block.type) {
-        case 'wake': blockScore = getWakeScore(entry); break;
-        case 'body': blockScore = getBodyScore(entry); break;
-        case 'deep_work': blockScore = getDeepWorkScore(entry, tasks); break;
-        case 'production': blockScore = getProductionScore(entry); break;
-        case 'custom': blockScore = getCustomBlockScore(entry); break;
-        case 'reflection': {
-          const ref = entry.dynamic_values?.reflection;
-          blockScore = ref ? (ref.deepWork || ref.note ? 10 : 5) : 0;
-          break;
-        }
-      }
-      earned += (blockScore / 10) * w;
-      totalWeight += w;
-    });
+  return blocks;
+}
 
-    // Domain passive
-    earned += (getDomainAverage(entry) / 10) * 15;
-    totalWeight += 15;
+function resolveStructure(entry: DailyEntry): DayBlock[] {
+  if (Array.isArray(entry.structure_snapshot) && entry.structure_snapshot.length > 0) {
+    return entry.structure_snapshot;
+  }
+  return inferStructure(entry);
+}
 
-    return totalWeight > 0 ? clamp(Math.round((earned / totalWeight) * 100), 0, 100) : 0;
+export function hasScoreEvidence(entry: DailyEntry): boolean {
+  if ((entry.totalSleepHours ?? 0) > 0) return true;
+  if ((entry.efficiencyRating ?? entry.energyLevel ?? 0) > 0) return true;
+  if ((entry.recoveryScore ?? 0) > 0 || (entry.mentalResetQuality ?? 0) > 0) return true;
+  if (Object.keys(entry.dynamic_values?.reflection || {}).length > 0) return true;
+  if (Object.keys(entry.dynamic_values?.custom || {}).length > 0) return true;
+  if (Object.keys(entry.dynamic_values?.bodyHabits || {}).length > 0) return true;
+  if (inferStructure(entry).length > 0) return true;
+
+  const domains = [
+    entry.domainBody,
+    entry.domainMind,
+    entry.domainIntelligence,
+    entry.domainSkills,
+    entry.domainProduct,
+    entry.domainMoney,
+    entry.domainSocial,
+    entry.domainEnvironment,
+  ];
+
+  return domains.some((value) => typeof value === 'number' && value > 0);
+}
+
+function evaluateWakeBlock(entry: DailyEntry): number {
+  const wakeEvidence = hasText(entry.actualWakeTime) || entry.sunlightExposure || entry.hydration || (entry.morningDistraction || 0) > 0;
+  if (!wakeEvidence) return 0;
+
+  return weightedAverage([
+    { score: hasText(entry.actualWakeTime) ? 1 : 0, weight: 0.25 },
+    { score: entry.sunlightExposure ? 1 : 0, weight: 0.25 },
+    { score: entry.hydration ? 1 : 0, weight: 0.25 },
+    { score: 1 - clamp((entry.morningDistraction || 2) / 2, 0, 1), weight: 0.25 },
+  ]).score;
+}
+
+function evaluateDynamicBodyBlock(entry: DailyEntry, options?: ScoreComputationOptions): CompletionUnit {
+  const activeHabits = resolveBodyHabits(entry, options);
+  const values = entry.dynamic_values?.bodyHabits || {};
+  if (activeHabits.length === 0) return { score: 0, active: false };
+
+  const parts = activeHabits.map((habit) => {
+    const value = values[habit.id];
+
+    if (habit.type === 'toggle') {
+      return { score: value === true ? 1 : 0, weight: 1 };
+    }
+
+    if (habit.type === 'rating') {
+      return { score: clamp(toNumber(value) / 10, 0, 1), weight: 1 };
+    }
+
+    return { score: clamp(toNumber(value) / 30, 0, 1), weight: 1 };
+  });
+
+  return weightedAverage(parts);
+}
+
+function evaluateLegacyBodyBlock(entry: DailyEntry): CompletionUnit {
+  const hasBodyEvidence =
+    entry.gymTraining === 'completed' ||
+    entry.gymTraining === 'partial' ||
+    entry.gymTraining === 'skipped' ||
+    entry.gymTraining === 'none' ||
+    entry.jawlineWorkout ||
+    hasPositiveNumber(entry.gymIntensity) ||
+    hasPositiveNumber(entry.energyAfterGym);
+
+  if (!hasBodyEvidence) return { score: 0, active: false };
+
+  const statusScore =
+    entry.gymTraining === 'completed'
+      ? 1
+      : entry.gymTraining === 'partial'
+        ? 0.55
+        : 0;
+
+  return weightedAverage([
+    { score: statusScore, weight: 0.6 },
+    { score: entry.jawlineWorkout ? 1 : 0, weight: 0.1 },
+    { score: clamp((entry.gymIntensity || 0) / 10, 0, 1), weight: 0.15, active: hasPositiveNumber(entry.gymIntensity) },
+    { score: clamp((entry.energyAfterGym || 0) / 10, 0, 1), weight: 0.15, active: hasPositiveNumber(entry.energyAfterGym) },
+  ]);
+}
+
+function evaluateBodyBlock(entry: DailyEntry, options?: ScoreComputationOptions): number {
+  const dynamic = evaluateDynamicBodyBlock(entry, options);
+  if (dynamic.active) return dynamic.score;
+  return evaluateLegacyBodyBlock(entry).score;
+}
+
+function evaluateDeepWorkBlock(entry: DailyEntry, block: DayBlock, tasks: Task[]): number {
+  const sessions = getDeepWorkSessions(entry);
+  const plannedCount = Math.max(block.dwCount || 0, sessions.length, sessions.length > 0 ? 1 : 0);
+  if (plannedCount <= 0) return 0;
+
+  const padded = Array.from({ length: plannedCount }, (_, index) => sessions[index] || {});
+
+  const total = padded.reduce((sum, session) => {
+    const focus = clamp(toNumber((session as any).focus ?? (session as any).quality) / 100, 0, 1);
+    const hasTarget = Boolean((session as any).taskId || hasText((session as any).taskTitle));
+    const linkedTask = (session as any).taskId ? tasks.find((task) => task.id === (session as any).taskId) : null;
+    const taskProgress = linkedTask
+      ? linkedTask.completed || linkedTask.status === 'done'
+        ? 1
+        : clamp((linkedTask.completedTime || 0) / Math.max(linkedTask.estimatedTime, 1), 0, 1)
+      : 0;
+    const completedSignal = (session as any).isCompleted || (session as any).status === 'done' ? 1 : 0;
+
+    return sum + clamp(focus * 0.75 + Number(hasTarget) * 0.1 + Math.max(taskProgress, completedSignal) * 0.15, 0, 1);
+  }, 0);
+
+  return clamp(total / plannedCount, 0, 1);
+}
+
+function evaluateProductionBlock(entry: DailyEntry): number {
+  const hasOutputText = hasText(entry.productionOutput);
+  const hasOutputScore = hasPositiveNumber(entry.outputScore);
+  const hasGoalProgress = hasPositiveNumber(entry.goalProgress);
+  const hasProductionType = Array.isArray(entry.productionType) && entry.productionType.length > 0;
+
+  if (!hasOutputText && !hasOutputScore && !hasGoalProgress && !hasProductionType) return 0;
+
+  const score = weightedAverage([
+    { score: hasOutputText ? 1 : hasProductionType ? 0.65 : 0, weight: 0.4 },
+    { score: clamp((entry.outputScore || 0) / 10, 0, 1), weight: 0.4 },
+    { score: clamp((entry.goalProgress || 0) / 10, 0, 1), weight: 0.2, active: hasGoalProgress },
+  ]);
+
+  return score.score;
+}
+
+function hasReflectionValue(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object' && value !== null) return true;
+  return false;
+}
+
+function evaluateReflectionBlock(entry: DailyEntry): number {
+  const reflection = entry.dynamic_values?.reflection as ReflectionData | undefined;
+  if (!reflection || Object.keys(reflection).length === 0) return 0;
+
+  const structure = resolveStructure(entry);
+  const hasDeepWork = structure.some((block) => block.type === 'deep_work');
+  const hasBody = structure.some((block) => block.type === 'body');
+
+  const coreKeys = ['tasks', 'energy'];
+  if (hasDeepWork) coreKeys.unshift('deepWork');
+  if (hasBody) coreKeys.push('body');
+
+  const coreAnswered = coreKeys.filter((key) => hasReflectionValue((reflection as Record<string, unknown>)[key])).length;
+  const optionalKeys = [
+    'deepWorkFailure',
+    'energyDropReason',
+    'followUpReason',
+    'note',
+    'planAdherence',
+    'primaryObstacle',
+    'disciplineScore',
+    'biggestWin',
+    'wouldChange',
+    'tomorrowNonNegotiable',
+  ];
+  const optionalAnswered = optionalKeys.filter((key) => hasReflectionValue((reflection as Record<string, unknown>)[key])).length;
+
+  const coreScore = coreKeys.length > 0 ? coreAnswered / coreKeys.length : 0;
+  const depthBonus = Math.min(optionalAnswered, 2) * 0.1;
+
+  return clamp(coreScore * 0.8 + depthBonus, 0, 1);
+}
+
+function evaluateCustomBlock(entry: DailyEntry, block: DayBlock): number {
+  const value = entry.dynamic_values?.custom?.[block.id];
+  if (value == null || value === '') return 0;
+
+  if (block.customType === 'toggle') return String(value).toLowerCase() === 'true' || String(value) === '1' ? 1 : 0;
+  if (block.customType === 'text') return hasText(value) ? 1 : 0;
+  return clamp(toNumber(value) / 10, 0, 1);
+}
+
+function evaluateBlockCompletion(entry: DailyEntry, block: DayBlock, tasks: Task[], options?: ScoreComputationOptions): number {
+  switch (block.type) {
+    case 'wake':
+      return evaluateWakeBlock(entry);
+    case 'body':
+      return evaluateBodyBlock(entry, options);
+    case 'deep_work':
+      return evaluateDeepWorkBlock(entry, block, tasks);
+    case 'production':
+      return evaluateProductionBlock(entry);
+    case 'reflection':
+      return evaluateReflectionBlock(entry);
+    case 'custom':
+      return evaluateCustomBlock(entry, block);
+    default:
+      return 0;
+  }
+}
+
+function getBlockEvaluations(entry: DailyEntry, tasks: Task[], options?: ScoreComputationOptions): BlockEvaluation[] {
+  return resolveStructure(entry).map((block) => ({
+    block,
+    completion: clamp(evaluateBlockCompletion(entry, block, tasks, options), 0, 1),
+  }));
+}
+
+function getDomainAverage(entry: DailyEntry): CompletionUnit {
+  const values = [
+    entry.domainBody,
+    entry.domainMind,
+    entry.domainIntelligence,
+    entry.domainSkills,
+    entry.domainProduct,
+    entry.domainMoney,
+    entry.domainSocial,
+    entry.domainEnvironment,
+  ].filter((value): value is number => typeof value === 'number' && value > 0);
+
+  if (values.length === 0) return { score: 0, active: false };
+  return { score: clamp(values.reduce((sum, value) => sum + value, 0) / (values.length * 10), 0, 1), active: true };
+}
+
+function getRelevantTasks(entry: DailyEntry, tasks: Task[]): Task[] {
+  const date = entry.date;
+  const sessionIds = new Set(getDeepWorkSessions(entry).map((session: any) => session.taskId).filter(Boolean));
+
+  const relevant = tasks.filter((task) => {
+    if (sessionIds.has(task.id)) return true;
+    if (task.completedAt?.startsWith(date)) return true;
+    if (task.createdAt?.startsWith(date) && (task.priority === 'HIGH' || task.priority === 'MED')) return true;
+    return false;
+  });
+
+  return relevant.filter((task, index, array) => array.findIndex((item) => item.id === task.id) === index);
+}
+
+export function calcExecution(entry: DailyEntry, options: ScoreComputationOptions = {}): number {
+  const resolvedTasks = resolveTasks(options);
+  const blockEvaluations = getBlockEvaluations(entry, resolvedTasks, options);
+  const domain = getDomainAverage(entry);
+
+  const weightedBlocks = blockEvaluations.map(({ block, completion }) => ({
+    score: completion,
+    weight: (BLOCK_WEIGHTS[block.type] || BLOCK_WEIGHTS.custom) * (block.weight ?? 1),
+  }));
+
+  if (domain.active) {
+    weightedBlocks.push({ score: domain.score, weight: 0.08 });
   }
 
-  // Legacy fallback
-  const metrics = [
-    { v: getWakeScore(entry), w: 0.10, m: 10 },
-    { v: getBodyScore(entry), w: 0.15, m: 10 },
-    { v: getDeepWorkScore(entry, tasks), w: 0.25, m: 10 },
-    { v: getProductionScore(entry), w: 0.20, m: 10 },
-    { v: getDomainAverage(entry), w: 0.15, m: 10 },
-  ];
-  return clamp(Math.round(metrics.reduce((s, m) => s + (m.v / m.m) * m.w * 100, 0)), 0, 100);
+  return normalizeToPercent(weightedAverage(weightedBlocks));
 }
 
-// ═══════════════════════════════════════
-//  LAYER 2: CONDITION SCORE (20%)
-//  The state you were IN today
-// ═══════════════════════════════════════
+export function calcCondition(entry: DailyEntry): number {
+  const sleep = entry.totalSleepHours ?? 0;
+  const efficiency = entry.efficiencyRating ?? entry.energyLevel ?? 0;
+  const recovery = entry.recoveryScore ?? 0;
+  const reset = entry.mentalResetQuality ?? 0;
 
-export function calcCondition(entry: DailyEntry, _tasks: Task[] = []): number {
-  const sleep = entry.totalSleepHours || 0;
-  const energy = entry.energyLevel || 5;
-
-  const sleepScore = clamp((sleep / 8) * 100, 0, 100);
-  const energyScore = (energy / 10) * 100;
-
-  return clamp(Math.round(0.6 * sleepScore + 0.4 * energyScore), 0, 100);
+  return normalizeToPercent(weightedAverage([
+    { score: sleepQuality(sleep), weight: 0.45, active: sleep > 0 },
+    { score: clamp(efficiency / 10, 0, 1), weight: 0.35, active: efficiency > 0 },
+    { score: clamp(recovery / 10, 0, 1), weight: 0.1, active: recovery > 0 },
+    { score: clamp(reset / 10, 0, 1), weight: 0.1, active: reset > 0 },
+  ]));
 }
 
-// ═══════════════════════════════════════
-//  LAYER 3: INTEGRITY SCORE (30%)
-//  How aligned were you with your plan?
-//  *** THIS IS WHERE REFLECTION MATTERS ***
-// ═══════════════════════════════════════
-
-export function calcIntegrity(entry: DailyEntry, tasks: Task[] = []): number {
+export function calcIntegrity(entry: DailyEntry, options: ScoreComputationOptions = {}): number {
+  const resolvedTasks = resolveTasks(options);
+  const blockEvaluations = getBlockEvaluations(entry, resolvedTasks, options);
+  const relevantTasks = getRelevantTasks(entry, resolvedTasks);
   const reflection = entry.dynamic_values?.reflection as ReflectionData | undefined;
 
-  // --- Planned vs Completed deep work sessions ---
-  let planned = 2; // default
-  let completed = 0;
+  const planCompletion = weightedAverage(
+    blockEvaluations.map(({ block, completion }) => ({
+      score: completion >= 0.7 ? 1 : completion >= 0.4 ? 0.55 : completion,
+      weight: (BLOCK_WEIGHTS[block.type] || BLOCK_WEIGHTS.custom) * (block.weight ?? 1),
+    }))
+  );
 
-  if (entry.structure_snapshot?.length) {
-    const dwBlock = entry.structure_snapshot.find(b => b.type === 'deep_work');
-    planned = dwBlock?.dwCount || 2;
-    const qualities = entry.dynamic_values?.dwQualities || [];
-    completed = qualities.filter((q: number) => q >= 4).length; // quality >= 4/10 counts as "completed"
-  } else {
-    // Legacy
-    if ((entry.dw1FocusQuality || 0) >= 4) completed++;
-    if ((entry.dw2FocusQuality || 0) >= 4) completed++;
+  const taskCommitment = weightedAverage(
+    relevantTasks.map((task) => ({
+      score: task.completed || task.status === 'done'
+        ? 1
+        : clamp((task.completedTime || 0) / Math.max(task.estimatedTime, 1), 0, 1),
+      weight: task.priority === 'HIGH' ? 1.2 : task.priority === 'MED' ? 1 : 0.8,
+    }))
+  );
+
+  const reflectionCompletion = weightedAverage([
+    {
+      score: evaluateReflectionBlock(entry),
+      weight: 1,
+      active: blockEvaluations.some(({ block }) => block.type === 'reflection') || Boolean(reflection),
+    },
+  ]);
+
+  const base = weightedAverage([
+    { score: planCompletion.score, weight: 0.5, active: planCompletion.active },
+    { score: taskCommitment.score, weight: 0.3, active: taskCommitment.active },
+    { score: reflectionCompletion.score, weight: 0.2, active: reflectionCompletion.active },
+  ]);
+
+  if (!base.active) return 0;
+
+  let integrity = base.score;
+
+  if (reflection?.planAdherence === 'FULLY') integrity += 0.08;
+  if (reflection?.planAdherence === 'MOSTLY') integrity += 0.03;
+  if (reflection?.planAdherence === 'PARTIALLY') integrity -= 0.05;
+  if (reflection?.planAdherence === 'NOT_AT_ALL') integrity -= 0.15;
+
+  if (typeof reflection?.disciplineScore === 'number') {
+    integrity += (clamp(reflection.disciplineScore, 0, 10) / 10 - 0.5) * 0.16;
   }
 
-  let base = (completed / Math.max(planned, 1)) * 100;
+  const obstacle = reflection?.primaryObstacle || reflection?.deepWorkFailure;
+  if (obstacle === 'DISTRACTION' || obstacle === 'PROCRASTINATION') integrity -= 0.08;
+  if (obstacle === 'OVERLOAD') integrity -= 0.04;
+  if (obstacle === 'EXTERNAL_INTERRUPTION') integrity -= 0.02;
+  if (obstacle === 'NONE') integrity += 0.04;
 
-  // --- Gym alignment ---
-  if (entry.gymTraining === 'completed') base += 5;
-  else if (entry.gymTraining === 'skipped' || entry.gymTraining === 'none') base -= 5;
-
-  // --- Task Completion / Integrity impact ---
-  if (tasks.length > 0) {
-    // Only check active tasks linked to today, or tasks pending
-    const highTasks = tasks.filter(t => t.priority === 'HIGH' && (t.status === 'active' || t.status === 'pending'));
-    highTasks.forEach(task => {
-      // If task wasn't fully complete
-      if (task.status !== 'done') {
-         if ((task.completedTime || 0) === 0) {
-            // Task never started at all
-            let penalty = 20;
-            if (reflection?.deepWorkFailure === 'OVERLOAD') {
-               penalty *= 0.7; // Cut penalty by 30% if user acknowledges overload
-            }
-            base -= Math.round(penalty);
-         } else if ((task.completedTime || 0) < task.estimatedTime) {
-            // Task partially executed but not completely
-            let penalty = 10;
-            if (reflection?.deepWorkFailure === 'OVERLOAD') {
-               penalty *= 0.7; // Cut penalty by 30%
-            }
-            base -= Math.round(penalty);
-         }
-      } else {
-         base += 5; // Honored a HIGH task commitment
-      }
-    });
-  }
-
-  // --- Reflection-based penalty/bonus modifiers ---
-  if (reflection?.deepWorkFailure === 'LOW_ENERGY') {
-    base *= 0.9; // soften penalty — valid reason
-  } else if (reflection?.deepWorkFailure === 'DISTRACTION') {
-    base *= 0.8; // harsher — controllable
-  } else if (reflection?.deepWorkFailure === 'OVERLOAD') {
-    base *= 0.85; // system should have adapted
-  } else if (reflection?.deepWorkFailure === 'NO_CLARITY') {
-    base *= 0.88; // planning issue
-  }
-
-  // No reflection + poor performance = honesty penalty
-  if (!reflection && completed < planned) {
-    base *= 0.85;
-  }
-
-  // Honesty bonus: reflection present
-  if (reflection) base += 5;
-
-  // Legacy reflection adjustments (backward compat)
-  if (reflection?.deepWork === 'All') base += 8;
-  if (reflection?.deepWork === 'None') base -= 8;
-  if (reflection?.tasks === 'Yes') base += 3;
-  if (reflection?.tasks === 'No') base -= 3;
-
-  return clamp(Math.round(base), 0, 100);
+  return clamp(Math.round(clamp(integrity, 0, 1) * 100), 0, 100);
 }
-
-// ═══════════════════════════════════════
-//  THE TRUTH SCORE
-//  SystemScore = Execution × 0.5 + Condition × 0.2 + Integrity × 0.3
-// ═══════════════════════════════════════
 
 function getState(score: number): SystemState {
   if (score >= 90) return 'PEAK';
@@ -274,42 +518,52 @@ export interface ScoreBreakdown {
   state: SystemState;
 }
 
-export function calculateScore(entry: DailyEntry, tasks: Task[] = []): ScoreResult {
-  const execution = calcExecution(entry, tasks);
-  const condition = calcCondition(entry, tasks);
-  const integrity = calcIntegrity(entry, tasks);
+export function calculateScore(entry: DailyEntry, options: ScoreComputationOptions = {}): ScoreResult {
+  const execution = calcExecution(entry, options);
+  const condition = calcCondition(entry);
+  const integrity = calcIntegrity(entry, options);
 
-  const score = clamp(
-    Math.round(execution * 0.5 + condition * 0.2 + integrity * 0.3),
-    0,
-    100
-  );
+  const composite = weightedAverage([
+    { score: execution / 100, weight: GROUP_WEIGHTS.execution, active: execution > 0 || resolveStructure(entry).length > 0 },
+    { score: condition / 100, weight: GROUP_WEIGHTS.condition, active: condition > 0 },
+    { score: integrity / 100, weight: GROUP_WEIGHTS.integrity, active: integrity > 0 || resolveStructure(entry).length > 0 },
+  ]);
 
+  const score = composite.active ? clamp(Math.round(composite.score * 100), 0, 100) : 0;
   return { score, state: getState(score) };
 }
 
-export function calculateScoreBreakdown(entry: DailyEntry, tasks: Task[] = []): ScoreBreakdown {
-  const execution = calcExecution(entry, tasks);
-  const condition = calcCondition(entry, tasks);
-  const integrity = calcIntegrity(entry, tasks);
+export function calculateScoreBreakdown(entry: DailyEntry, options: ScoreComputationOptions = {}): ScoreBreakdown {
+  const execution = calcExecution(entry, options);
+  const condition = calcCondition(entry);
+  const integrity = calcIntegrity(entry, options);
+  const { score, state } = calculateScore(entry, options);
 
-  const systemScore = clamp(
-    Math.round(execution * 0.5 + condition * 0.2 + integrity * 0.3),
-    0,
-    100
-  );
-
-  return { execution, condition, integrity, systemScore, state: getState(systemScore) };
+  return {
+    execution,
+    condition,
+    integrity,
+    systemScore: score,
+    state,
+  };
 }
 
-/** Compute sub-scores for display map (backward compat) */
-export function calculateSubScores(entry: DailyEntry, tasks: Task[] = []) {
-  const breakdown = calculateScoreBreakdown(entry, tasks);
+export function calculateSubScores(entry: DailyEntry, options: ScoreComputationOptions = {}) {
+  const resolvedTasks = resolveTasks(options);
+  const blockEvaluations = getBlockEvaluations(entry, resolvedTasks, options);
+  const breakdown = calculateScoreBreakdown(entry, options);
+
+  const getBlockPercent = (type: DayBlock['type']) => {
+    const blocks = blockEvaluations.filter((item) => item.block.type === type);
+    if (blocks.length === 0) return 0;
+    return Math.round((blocks.reduce((sum, item) => sum + item.completion, 0) / blocks.length) * 100);
+  };
+
   return {
-    deepWorkScore: Math.round(getDeepWorkScore(entry, tasks) * 10),
-    physicalScore: Math.round(getBodyScore(entry) * 10),
-    learningScore: 0,
-    productionScore: Math.round(getProductionScore(entry) * 10),
+    deepWorkScore: getBlockPercent('deep_work'),
+    physicalScore: getBlockPercent('body'),
+    learningScore: getBlockPercent('custom'),
+    productionScore: getBlockPercent('production'),
     executionScore: breakdown.execution,
     conditionScore: breakdown.condition,
     integrityScore: breakdown.integrity,

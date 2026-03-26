@@ -1,7 +1,9 @@
-import { DailyEntry, Task } from '../types';
+import { DailyEntry, DayTemplate, Task } from '../types';
 import { CausalInsight, FailureAnalysis, PerformanceDriver, CausalChain, PredictiveState } from '../types';
 import { useAnalyticsStore } from '../stores/analyticsStore';
 import { computeAllGoals } from './goalEngine';
+import { calculateScore, calculateScoreBreakdown } from './scoreEngine';
+import { createEmptyEntry } from '../types';
 
 // ─── UTILS ───
 export function avg(arr: number[]): number {
@@ -34,6 +36,10 @@ export function pearson(x: number[], y: number[]): number {
 export function normalize01(v: number, min: number, max: number): number {
   if (max === min) return 0.5;
   return Math.max(0, Math.min(1, (v - min) / (max - min)));
+}
+
+export function clamp(v: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, v));
 }
 
 export function stabilityFactor(series: number[]): number {
@@ -69,18 +75,28 @@ export function impactFromR(r: number): number {
   return Math.round(r * 30);
 }
 
+function getEntryScore(entry: DailyEntry): number {
+  return calculateScore(entry).score;
+}
+
+function getEntryIntegrity(entry: DailyEntry): number {
+  return calculateScoreBreakdown(entry).integrity;
+}
+
+function getDeepWorkVolume(entry: DailyEntry): number {
+  if (entry.dynamic_values?.dwSessions) {
+    return entry.dynamic_values.dwSessions.reduce((acc: number, s: any) => acc + (s.duration || 60) * ((s.focus || s.quality || 0) / 100), 0);
+  }
+  return (entry.dynamic_values?.dwQualities || []).reduce((acc: number, q: number) => acc + q, 0);
+}
+
 // ─── 0. LIMITED ANALYSIS (2-4 Days) ───
 export function limitedAnalysis(entries: DailyEntry[]): CausalInsight[] {
   if (entries.length < 2) return [];
 
   // Simple math for limited days
-  const score = entries.map(e => e.systemScore || 0);
-  const deepWorkVol = entries.map(e => {
-    if (e.dynamic_values?.dwSessions) {
-      return e.dynamic_values.dwSessions.reduce((acc: number, s: any) => acc + (s.duration || 60) * (s.focus / 100), 0);
-    }
-    return (e.dynamic_values?.dwQualities || []).reduce((acc: number, q: number) => acc + q, 0);
-  });
+  const score = entries.map(getEntryScore);
+  const deepWorkVol = entries.map(getDeepWorkVolume);
 
   const normScore = score.map(v => normalize01(v, 40, 100));
   const normDW = deepWorkVol.map(v => normalize01(v, 0, 300));
@@ -107,18 +123,12 @@ export function detectCausation(entries: DailyEntry[]): CausalInsight[] {
 
   // Extract raw series directly from entries
   // Fill missing with averages or 0 to keep alignment
-  const score = entries.map(e => e.systemScore || 0);
-  const energy = entries.map(e => e.energyLevel || 50);
+  const score = entries.map(getEntryScore);
+  const energy = entries.map(e => e.efficiencyRating ?? e.energyLevel ?? 0);
   const sleep = entries.map(e => e.totalSleepHours || 7);
   
   // Custom series
-  const deepWorkVol = entries.map(e => {
-    // legacy array or new object
-    if (e.dynamic_values?.dwSessions) {
-      return e.dynamic_values.dwSessions.reduce((acc: number, s: any) => acc + (s.duration || 60) * (s.focus / 100), 0);
-    }
-    return (e.dynamic_values?.dwQualities || []).reduce((acc: number, q: number) => acc + q, 0);
-  });
+  const deepWorkVol = entries.map(getDeepWorkVolume);
   
   const distraction = entries.map(e => {
     const reflections = e.dynamic_values?.reflection;
@@ -130,11 +140,11 @@ export function detectCausation(entries: DailyEntry[]): CausalInsight[] {
     return count;
   });
   
-  const integrity = entries.map(e => e.integrityScore || 0);
+  const integrity = entries.map(getEntryIntegrity);
 
   // Normalize mapping
   const normScore = score.map(v => normalize01(v, 40, 100));
-  const normEnergy = energy.map(v => normalize01(v, 0, 100));
+  const normEnergy = energy.map(v => normalize01(v, 0, 10));
   const normSleep = sleep.map(v => normalize01(v, 4, 10)); // 4h to 10h
   const normDW = deepWorkVol.map(v => normalize01(v, 0, 300)); // up to 300 "volume" points
   
@@ -235,7 +245,8 @@ export function analyzeFailures(entries: DailyEntry[]): FailureAnalysis[] {
   
   let validDays = 0;
   entries.forEach(e => {
-    if (!e.dynamic_values?.reflection || !e.systemScore) return;
+    const score = getEntryScore(e);
+    if (!e.dynamic_values?.reflection || score <= 0) return;
     const ref = e.dynamic_values.reflection;
     validDays++;
     
@@ -246,7 +257,7 @@ export function analyzeFailures(entries: DailyEntry[]): FailureAnalysis[] {
         failures[dropCause].count += 1;
         
         // Calculate score drop from baseline (assume baseline 80 if dropping)
-        const drop = Math.min(0, e.systemScore - 80);
+        const drop = Math.min(0, score - 80);
       failures[dropCause].scoreDrop += drop;
     }
   });
@@ -267,24 +278,41 @@ export function predictOutcome(
   todayEntry: Partial<DailyEntry>, 
   plannedTasks: Task[]
 ): PredictiveState {
-  
-  // Base execution math
-  const sleep = todayEntry.totalSleepHours || 7;
-  const energy = todayEntry.energyLevel || 50;
-  
-  const expectedCondition = normalize01(sleep, 4, 10) * 50 + normalize01(energy, 0, 100) * 50;
-  
-  // Planned Execution
-  let expectedExecution = 0;
-  const deepTasks = plannedTasks.filter(t => !t.completed && (t.priority === 'HIGH' || t.energyType === 'deep'));
-  if (deepTasks.length > 0) expectedExecution = 80; // If they have plan, assume baseline execution
-  
-  // Expected integrity based on load
-  const load = deepTasks.length;
-  const expectedIntegrity = load <= 3 ? 90 : (load > 5 ? 50 : 75);
+  const date = todayEntry.date || new Date().toISOString().slice(0, 10);
+  const base = createEmptyEntry(date, todayEntry.structure_snapshot);
 
-  let expectedScore = 0.5 * expectedExecution + 0.2 * expectedCondition + 0.3 * expectedIntegrity;
-  expectedScore = Math.min(100, Math.max(0, expectedScore));
+  const deepTasks = plannedTasks.filter(task => !task.completed && task.energyType === 'deep');
+  const highPriority = plannedTasks.filter(task => !task.completed && task.priority === 'HIGH');
+
+  const inferredStructure: DayTemplate = todayEntry.structure_snapshot && todayEntry.structure_snapshot.length > 0
+    ? todayEntry.structure_snapshot
+    : [
+        { id: 'wake-predict', type: 'wake', title: 'WAKE SYSTEM' },
+        ...(deepTasks.length > 0 ? [{ id: 'dw-predict', type: 'deep_work', title: 'DEEP WORK', dwCount: Math.min(Math.max(deepTasks.length, 1), 4) } as const] : []),
+        ...(highPriority.length > 0 ? [{ id: 'prod-predict', type: 'production', title: 'PRODUCTION' } as const] : []),
+      ];
+
+  const predictedEntry: DailyEntry = {
+    ...base,
+    ...todayEntry,
+    structure_snapshot: inferredStructure,
+    dynamic_values: {
+      ...(base.dynamic_values || {}),
+      ...(todayEntry.dynamic_values || {}),
+      dwSessions: deepTasks.slice(0, Math.min(Math.max(deepTasks.length, 1), 4)).map((task) => ({
+        id: `predict-${task.id}`,
+        taskId: task.id,
+        taskTitle: task.title,
+        duration: Math.max(30, Math.min(task.estimatedTime || 60, 120)),
+        focus: clamp(55 + (todayEntry.efficiencyRating ?? todayEntry.energyLevel ?? 5) * 4, 35, 90),
+        status: 'pending',
+      })),
+    },
+    outputScore: highPriority.length > 0 ? 6 : todayEntry.outputScore || 0,
+    goalProgress: highPriority.length > 0 ? 6 : todayEntry.goalProgress || 0,
+  };
+
+  const expectedScore = calculateScore(predictedEntry, { tasks: plannedTasks }).score;
   
   let trend: 'RISING' | 'STABLE' | 'FALLING' = 'STABLE';
   if (expectedScore > 80) trend = 'RISING';
@@ -420,8 +448,8 @@ export function analyzeWeeklyPerformance(
   previousWeek: DailyEntry[], 
   failures: FailureAnalysis[]
 ): WeeklyAnalysis {
-  const currentScores = currentWeek.map(e => e.systemScore || 0);
-  const previousScores = previousWeek.map(e => e.systemScore || 0);
+  const currentScores = currentWeek.map(getEntryScore);
+  const previousScores = previousWeek.map(getEntryScore);
   
   const currentAvg = avg(currentScores);
   const prevAvg = avg(previousScores);
@@ -444,15 +472,10 @@ export function analyzeWeeklyPerformance(
 
   // 2. System Mode
   const sleepAvg = avg(currentWeek.map(e => e.totalSleepHours || 0));
-  const energyAvg = avg(currentWeek.map(e => e.energyLevel || 0));
+  const energyAvg = avg(currentWeek.map(e => e.efficiencyRating ?? e.energyLevel ?? 0));
   
   // Custom DW logic
-  const dwVol = currentWeek.map(e => {
-    if (e.dynamic_values?.dwSessions) {
-      return e.dynamic_values.dwSessions.reduce((acc: number, s: any) => acc + (s.duration || 60) * (s.focus / 100), 0);
-    }
-    return (e.dynamic_values?.dwQualities || []).reduce((acc: number, q: number) => acc + q, 0);
-  });
+  const dwVol = currentWeek.map(getDeepWorkVolume);
   const dwAvg = avg(dwVol);
 
   let mode: WeeklyAnalysis['mode'] = 'MAINTENANCE';
@@ -541,15 +564,12 @@ export function generateWeeklyReport(
   const goalImpacts = calculateGoalImpact(goals, tasks, currentWeek, previousWeek);
   
   const currentSleep = avg(currentWeek.map(e => e.totalSleepHours || 0));
-  const currentEnergy = avg(currentWeek.map(e => e.energyLevel || 0));
+  const currentEnergy = avg(currentWeek.map(e => e.efficiencyRating ?? e.energyLevel ?? 0));
   
-  const getDW = (arr: DailyEntry[]) => arr.map(e => {
-    if (e.dynamic_values?.dwSessions) return e.dynamic_values.dwSessions.reduce((acc: number, s: any) => acc + (s.duration || 60) * (s.focus / 100), 0);
-    return (e.dynamic_values?.dwQualities || []).reduce((acc: number, q: number) => acc + q, 0);
-  });
+  const getDW = (arr: DailyEntry[]) => arr.map(getDeepWorkVolume);
   
   const currentDW = Math.round(avg(getDW(currentWeek)) / 60 * 10) / 10;
-  const currentScore = Math.round(avg(currentWeek.map(e => e.systemScore || 0)));
+  const currentScore = Math.round(avg(currentWeek.map(getEntryScore)));
 
   const plan = generateStrategy(insights, failures, verdict.mode, currentDW * 60, currentSleep);
 

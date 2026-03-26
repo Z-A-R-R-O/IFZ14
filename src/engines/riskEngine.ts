@@ -1,5 +1,7 @@
 import type { DailyEntry, RiskSignal } from '../types';
 import { calculateScore } from './scoreEngine';
+import { getDeepWorkFocus } from './dwExtractors';
+import { getBodySignal, hasBodyRoutineConfigured } from './systemSignals';
 
 /**
  * Risk Engine — Detects burnout, drop, and overwork signals.
@@ -25,14 +27,15 @@ export function assessRisk(entries: DailyEntry[]): RiskSignal {
     signals.push(`Score declining for ${consecutiveDrops} consecutive days`);
   }
 
-  // Check for missed gym (3+ days in last 7)
-  const missedGym = recent.filter(e => e.gymTraining === 'skipped').length;
-  if (missedGym >= 3) {
-    signals.push(`Gym skipped ${missedGym} of last ${recent.length} days`);
+  // Check for body-system misses across tracked or planned body routines
+  const trackedBodyDays = recent.filter(hasBodyRoutineConfigured);
+  const missedBody = trackedBodyDays.filter((entry) => getBodySignal(entry) < 40).length;
+  if (trackedBodyDays.length >= 3 && missedBody >= 3) {
+    signals.push(`Body system failed ${missedBody} of last ${trackedBodyDays.length} tracked days`);
   }
 
   // Check for low energy pattern
-  const avgEnergy = recent.reduce((s, e) => s + (e.energyLevel || 0), 0) / recent.length;
+  const avgEnergy = recent.reduce((s, e) => s + (e.efficiencyRating ?? e.energyLevel ?? 0), 0) / recent.length;
   if (avgEnergy < 4) {
     signals.push(`Average energy dangerously low at ${avgEnergy.toFixed(1)}/10`);
   }
@@ -44,7 +47,7 @@ export function assessRisk(entries: DailyEntry[]): RiskSignal {
   }
 
   // Check for low deep work focus
-  const avgFocus = recent.reduce((s, e) => s + ((e.dw1FocusQuality || 0) + (e.dw2FocusQuality || 0)) / 2, 0) / recent.length;
+  const avgFocus = recent.reduce((s, e) => s + getDeepWorkFocus(e), 0) / recent.length;
   if (avgFocus < 4) {
     signals.push('Deep work focus critically low — consider recovery day');
   }

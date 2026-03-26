@@ -6,6 +6,7 @@ const links = [
   { to: '/', label: 'SYSTEM' },
   { to: '/daily', label: 'DAILY' },
   { to: '/tasks', label: 'WORK' },
+  { to: '/biometrics', label: 'BODY' },
   { to: '/analytics', label: 'ANALYTICS' },
   { to: '/goals', label: 'GOALS' },
   { to: '/reports', label: 'REPORTS' },

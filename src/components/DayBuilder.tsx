@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { DayTemplate, DayBlock, CustomInputType } from '../types';
+import type { AutoDayPrefillValues, DayTemplate, DayBlock, CustomInputType } from '../types';
 import { useDailyStore, BUILTIN_TEMPLATES } from '../stores/dailyStore';
 import { useAutoDayStore } from '../stores/autoDayStore';
 import { normalizeModeName } from '../lib/modeName';
@@ -15,7 +15,7 @@ import { CSS } from '@dnd-kit/utilities';
  */
 
 interface DayBuilderProps {
-  onComplete: (template: DayTemplate, modeName: string, preFilledValues: any) => void;
+  onComplete: (template: DayTemplate, modeName: string, preFilledValues: AutoDayPrefillValues) => void;
   onCancel?: () => void;
 }
 
@@ -174,11 +174,11 @@ export default function DayBuilder({ onComplete, onCancel }: DayBuilderProps) {
     const normalizedModeName = normalizeModeName(customName);
     
     // Pass along prefilled values if we are editing auto-day
-    const preFilled = isAutoEdit ? {
+    const preFilled: AutoDayPrefillValues = isAutoEdit ? {
       wake: builderData.preFilled.wake,
       body: builderData.preFilled.body,
-      deepWork: builderData.deepWorkSessions,
-      production: builderData.productionTarget,
+      deepWork: { sessions: builderData.deepWorkSessions },
+      production: { target: builderData.productionTarget },
       custom: builderData.preFilled.custom || {}
     } : {};
     

@@ -1,5 +1,7 @@
 import type { DailyEntry, StreakData } from '../types';
 import { calculateScore } from './scoreEngine';
+import { hasQualityDeepWork } from './dwExtractors';
+import { hasCompletedBodyRoutine } from './systemSignals';
 
 /**
  * Streak Engine — Tracks consecutive days of key behaviors.
@@ -19,16 +21,16 @@ export function calculateStreaks(entries: DailyEntry[]): StreakData {
   let earlyWake = 0;
   let highScore = 0;
 
-  // Count consecutive gym days
+  // Count consecutive body-system days
   for (const entry of sorted) {
-    if (entry.gymTraining === 'completed' || entry.gymTraining === 'partial') {
+    if (hasCompletedBodyRoutine(entry)) {
       gym++;
     } else break;
   }
 
   // Count consecutive deep work days (focus > 6)
   for (const entry of sorted) {
-    if ((entry.dw1FocusQuality || 0) >= 6 || (entry.dw2FocusQuality || 0) >= 6) {
+    if (hasQualityDeepWork(entry)) {
       deepWork++;
     } else break;
   }

@@ -8,6 +8,7 @@ import { calculateScore, calculateSubScores, calculateScoreBreakdown } from '../
 import { useTaskStore } from './taskStore';
 import { useAnalyticsStore } from './analyticsStore';
 import { STORAGE_NAMES } from '../config/identity';
+import { useBiometricStore } from './biometricStore';
 
 export const BUILTIN_TEMPLATES: Record<string, TemplateDefinition> = {
   execution: {
@@ -77,6 +78,7 @@ interface DailyState {
   getEntry: (date: string) => DailyEntry;
   updateEntry: (date: string, updates: Partial<DailyEntry>) => void;
   completeEntry: (date: string) => void;
+  recomputeAllScores: () => void;
   getAllEntries: () => DailyEntry[];
   getRecentEntries: (count: number) => DailyEntry[];
   getTodayEntry: () => DailyEntry;
@@ -159,10 +161,12 @@ export const useDailyStore = create<DailyState>()(
 
         // Phase 6: Sync tasks for scoring evaluation
         const tasks = useTaskStore.getState().tasks;
+        const bodyHabits = useBiometricStore.getState().habits;
+        const scoreOptions = { tasks, bodyHabits };
 
-        const { score, state: systemState } = calculateScore(entry, tasks);
-        const subScores = calculateSubScores(entry, tasks);
-        const breakdown = calculateScoreBreakdown(entry, tasks);
+        const { score, state: systemState } = calculateScore(entry, scoreOptions);
+        const subScores = calculateSubScores(entry, scoreOptions);
+        const breakdown = calculateScoreBreakdown(entry, scoreOptions);
 
         set((s: DailyState) => ({
           entries: {
@@ -190,6 +194,36 @@ export const useDailyStore = create<DailyState>()(
         useAnalyticsStore.getState().resolvePrediction(date, breakdown.systemScore, delta);
 
         return { score, state: systemState };
+      },
+
+      recomputeAllScores: () => {
+        const tasks = useTaskStore.getState().tasks;
+        const bodyHabits = useBiometricStore.getState().habits;
+        const scoreOptions = { tasks, bodyHabits };
+
+        set((state: DailyState) => {
+          const nextEntries = { ...state.entries };
+
+          Object.entries(state.entries).forEach(([date, entry]) => {
+            if (!entry.completed) return;
+
+            const { score } = calculateScore(entry, scoreOptions);
+            const subScores = calculateSubScores(entry, scoreOptions);
+            const breakdown = calculateScoreBreakdown(entry, scoreOptions);
+
+            nextEntries[date] = {
+              ...entry,
+              ...subScores,
+              averageScore: score,
+              executionScore: breakdown.execution,
+              conditionScore: breakdown.condition,
+              integrityScore: breakdown.integrity,
+              systemScore: breakdown.systemScore,
+            };
+          });
+
+          return { entries: nextEntries };
+        });
       },
 
       getAllEntries: () => {

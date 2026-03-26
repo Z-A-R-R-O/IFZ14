@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useDailyStore } from '../stores/dailyStore';
 import { useGoalStore } from '../stores/goalStore';
 import { useTaskStore } from '../stores/taskStore';
+import { useBiometricStore } from '../stores/biometricStore';
 import { calculateScore, calculateScoreBreakdown } from '../engines/scoreEngine';
 import { detectPattern } from '../engines/patternEngine';
 import { calculateStreaks } from '../engines/streakEngine';
@@ -11,6 +12,17 @@ import { generateSuggestions } from '../engines/suggestionEngine';
 import { detectCausation, analyzeFailures, predictOutcome, generateActions } from '../engines/analyticsEngine';
 import { computeAllGoals } from '../engines/goalEngine';
 import type { DailyEntry } from '../types';
+import {
+  getBodySignal,
+  getConditionSignal,
+  getDeepWorkMinutes,
+  getDeepWorkSignal,
+  getExecutionSignal,
+  getIntegritySignal,
+  getProductionSignal,
+  hasBodyRoutineConfigured,
+  hasCompletedBodyRoutine,
+} from '../engines/systemSignals';
 import { useSystemIntensity } from '../system/visual/useSystemIntensity';
 import { formatHeadingText, type as typeStyles } from '../typography';
 import AnimatedMetric from '../components/AnimatedMetric';
@@ -20,16 +32,6 @@ import { uiMotion } from '../ui/motion/presets';
 import { format, parseISO, subDays } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeModeName } from '../lib/modeName';
-import {
-  ResponsiveContainer,
-  AreaChart,
-  Area,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-} from 'recharts';
 
 /* ─── Animation Variants ─── */
 
@@ -41,6 +43,39 @@ const motionConfig = {
   smooth: uiMotion.smooth,
   slow: uiMotion.slow,
 };
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function buildLinePath(values: number[], width: number, height: number, padding: number) {
+  if (values.length === 0) return '';
+  const maxValue = Math.max(...values, 100);
+  const minValue = Math.min(...values, 0);
+  const range = Math.max(maxValue - minValue, 1);
+
+  return values
+    .map((value, index) => {
+      const x = padding + (index * (width - padding * 2)) / Math.max(values.length - 1, 1);
+      const y = height - padding - ((value - minValue) / range) * (height - padding * 2);
+      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(' ');
+}
+
+function buildPoints(values: number[], width: number, height: number, padding: number) {
+  if (values.length === 0) return [];
+  const maxValue = Math.max(...values, 100);
+  const minValue = Math.min(...values, 0);
+  const range = Math.max(maxValue - minValue, 1);
+
+  return values.map((value, index) => ({
+    x: padding + (index * (width - padding * 2)) / Math.max(values.length - 1, 1),
+    y: height - padding - ((value - minValue) / range) * (height - padding * 2),
+    value,
+    index,
+  }));
+}
 
 
 
@@ -55,22 +90,6 @@ function GlassSurface({ children, variant = 'base', className = '', delay = 0, s
 }
 
 /* ─── Tooltip ─── */
-
-function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: Array<{ value: number; dataKey?: string }>; label?: string }) {
-  if (!active || !payload?.length) return null;
-  return (
-    <div style={{
-      background: 'rgba(0,0,0,0.8)',
-      backdropFilter: 'blur(10px)',
-      border: '1px solid rgba(255,255,255,0.1)',
-      padding: '8px 12px',
-      borderRadius: '8px',
-    }}>
-      <div className={typeStyles.label}>{label?.toUpperCase()}</div>
-      <div className="font-mono text-[14px] text-white">{payload[0].value}</div>
-    </div>
-  );
-}
 
 /* ─── Signal Bar HUD ─── */
 
@@ -96,7 +115,7 @@ function SignalBarMap({ label, value, max }: { label: string; value: number; max
 
 /* ─── Diagnostic Row ─── */
 
-function DiagnosticRow({ label, value, state }: { label: string; value: string; state: 'critical'|'stable'|'none' }) {
+function DiagnosticRow({ label, value, state }: { label: string; value: string; state: 'critical' | 'stable' | 'none' }) {
   const isStatus = label === 'STATUS';
   const intensityStyle = {
     opacity: isStatus ? 0.96 : state === 'critical' ? 1 : state === 'stable' ? 0.7 : 0.4
@@ -105,15 +124,15 @@ function DiagnosticRow({ label, value, state }: { label: string; value: string; 
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <motion.div 
+        <motion.div
           animate={state === 'critical' ? { opacity: [0.4, 0.85, 0.4] } : state === 'stable' ? { opacity: 0.7 } : { opacity: 0.2 }}
           transition={{ repeat: Infinity, duration: 1.8 }}
-          style={{ 
-            width: '6px', height: '6px', borderRadius: '50%', 
-            background: '#fff', 
+          style={{
+            width: '6px', height: '6px', borderRadius: '50%',
+            background: '#fff',
             boxShadow: state === 'critical' ? '0 0 4px rgba(255,255,255,0.45)' : 'none',
             opacity: intensityStyle.opacity
-          }} 
+          }}
         />
         <span className={typeStyles.label} style={{ opacity: isStatus ? 0.72 : 0.48 }}>{label}</span>
       </div>
@@ -135,7 +154,7 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
   const tickCount = 20;
 
   return (
-    <motion.div 
+    <motion.div
       className="parallax-layer-3"
       style={{ position: 'relative', width: '184px', height: '184px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' }}
     >
@@ -162,7 +181,7 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
             />
           );
         })}
-        <motion.circle 
+        <motion.circle
           cx="92" cy="92" r={radius} fill="none" stroke="#fff" strokeWidth="4"
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
@@ -173,11 +192,11 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
         />
       </svg>
       {/* Inner Core */}
-      <motion.div 
+      <motion.div
         animate={{ opacity: [0.97, 1, 0.97] }}
         transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut' }}
-        style={{ 
-          color: '#fff', zIndex: 2, 
+        style={{
+          color: '#fff', zIndex: 2,
           textShadow: 'none',
           width: '112px', height: '112px', display: 'flex', alignItems: 'center', justifyContent: 'center',
           borderRadius: '50%', boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.08)'
@@ -190,7 +209,7 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
       {/* Execution Energy Pulses */}
       <div style={{ position: 'absolute', bottom: '-24px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
         {[...Array(5)].map((_, i) => (
-          <motion.div 
+          <motion.div
             key={i}
             animate={{ opacity: [0.16, 0.4, 0.16] }}
             transition={{ duration: pulseSpeed + 0.8, repeat: Infinity, delay: i * 0.12, ease: 'easeInOut' }}
@@ -207,9 +226,9 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
 function SignalFeedWaveform({ value }: { value: number }) {
   const isActive = value > 0;
   return (
-    <motion.svg 
-      width="100%" height="60" 
-      preserveAspectRatio="none" 
+    <motion.svg
+      width="100%" height="60"
+      preserveAspectRatio="none"
       className="wave"
       style={{ position: 'absolute', bottom: 0, left: 0, opacity: isActive ? 0.15 : 0.03, filter: 'blur(0.3px)' }}
     >
@@ -257,6 +276,131 @@ function ChartPlaceholder({ label = 'NO SIGNAL DETECTED', message = 'Awaiting in
   );
 }
 
+function CommandPill({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'critical' | 'positive' }) {
+  return (
+    <div className={`dashboard-command-pill is-${tone}`}>
+      <span className="dashboard-command-pill-label">{label}</span>
+      <span className="dashboard-command-pill-value">{value}</span>
+    </div>
+  );
+}
+
+function SummaryMetricCard({
+  label,
+  value,
+  suffix = '',
+  note,
+}: {
+  label: string;
+  value: number | string;
+  suffix?: string;
+  note: string;
+}) {
+  return (
+    <div className="dashboard-summary-card">
+      <div className="dashboard-summary-label">{label}</div>
+      <div className="dashboard-summary-value-row">
+        {typeof value === 'number' ? (
+          <AnimatedMetric value={value} className="dashboard-summary-value" />
+        ) : (
+          <span className="dashboard-summary-value">{value}</span>
+        )}
+        {suffix ? <span className="dashboard-summary-suffix">{suffix}</span> : null}
+      </div>
+      <div className="dashboard-summary-note">{note}</div>
+    </div>
+  );
+}
+
+function BreakdownRail({ label, value, note }: { label: string; value: number; note: string }) {
+  return (
+    <div className="dashboard-breakdown-row">
+      <div className="dashboard-breakdown-head">
+        <span className="dashboard-breakdown-label">{label}</span>
+        <span className="dashboard-breakdown-value">{Math.round(value)}%</span>
+      </div>
+      <div className="dashboard-breakdown-track">
+        <motion.div
+          className="dashboard-breakdown-fill"
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+          transition={{ duration: 0.5, ease: [0.24, 0.9, 0.2, 1] }}
+        />
+      </div>
+      <div className="dashboard-breakdown-note">{note}</div>
+    </div>
+  );
+}
+
+function FeedLine({ tag, text, tone = 'default' }: { tag: string; text: string; tone?: 'default' | 'critical' | 'positive' }) {
+  return (
+    <div className={`dashboard-feed-line is-${tone}`}>
+      <span className="dashboard-feed-tag">{tag}</span>
+      <span className="dashboard-feed-text">{text}</span>
+    </div>
+  );
+}
+
+function SignalTimelineGraph({
+  series,
+  primaryLabel,
+  secondaryLabel,
+}: {
+  series: Array<{ date: string; primary: number; secondary: number; primaryText: string; secondaryText: string }>;
+  primaryLabel: string;
+  secondaryLabel: string;
+}) {
+  const width = 760;
+  const height = 220;
+  const padding = 28;
+  const primaryPath = buildLinePath(series.map((point) => point.primary), width, height, padding);
+  const secondaryPath = buildLinePath(series.map((point) => point.secondary), width, height, padding);
+  const primaryPoints = buildPoints(series.map((point) => point.primary), width, height, padding);
+  const secondaryPoints = buildPoints(series.map((point) => point.secondary), width, height, padding);
+  const latestPoint = series[series.length - 1];
+  const labelIndexes = new Set([0, Math.max(0, Math.floor((series.length - 1) / 2)), Math.max(0, series.length - 1)]);
+
+  return (
+    <div className="dashboard-graph-wrap">
+      <div className="dashboard-graph-legend">
+        <div className="dashboard-graph-legend-item">
+          <span className="dashboard-graph-dot is-primary" />
+          <span className="dashboard-graph-legend-label">{primaryLabel}</span>
+          <span className="dashboard-graph-legend-value">{latestPoint?.primaryText ?? '--'}</span>
+        </div>
+        <div className="dashboard-graph-legend-item">
+          <span className="dashboard-graph-dot is-secondary" />
+          <span className="dashboard-graph-legend-label">{secondaryLabel}</span>
+          <span className="dashboard-graph-legend-value">{latestPoint?.secondaryText ?? '--'}</span>
+        </div>
+      </div>
+      <div className="dashboard-graph-stage">
+        <svg viewBox={`0 0 ${width} ${height}`} className="dashboard-graph-svg" preserveAspectRatio="none" aria-hidden="true">
+          {Array.from({ length: 4 }).map((_, index) => {
+            const y = padding + (index * (height - padding * 2)) / 3;
+            return <line key={index} x1={padding} y1={y} x2={width - padding} y2={y} className="dashboard-graph-grid-line" />;
+          })}
+          <path d={secondaryPath} className="dashboard-graph-path is-secondary" />
+          <path d={primaryPath} className="dashboard-graph-path is-primary" />
+          {secondaryPoints.map((point) => (
+            <circle key={`secondary-${point.index}`} cx={point.x} cy={point.y} r="3.2" className="dashboard-graph-point is-secondary" />
+          ))}
+          {primaryPoints.map((point) => (
+            <circle key={`primary-${point.index}`} cx={point.x} cy={point.y} r="3.8" className="dashboard-graph-point is-primary" />
+          ))}
+        </svg>
+      </div>
+      <div className="dashboard-graph-axis">
+        {series.map((point, index) => (
+          <span key={`${point.date}-${index}`} className={`dashboard-graph-axis-label${labelIndexes.has(index) ? ' is-visible' : ''}`}>
+            {labelIndexes.has(index) ? point.date : ''}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 void SignalFeedWaveform;
 
 /* ═══════════════════════════════════════
@@ -268,7 +412,8 @@ export default function Dashboard() {
   const entries = useDailyStore((s) => s.entries);
   const goals = useGoalStore((s) => s.goals);
   const tasks = useTaskStore((s) => s.tasks);
-  
+  const bodyHabits = useBiometricStore((s) => s.habits);
+
   const getActiveTemplateStructure = useDailyStore(s => s.getActiveTemplateStructure);
   const getActiveTemplateName = useDailyStore(s => s.getActiveTemplateName);
   const saveCustomTemplate = useDailyStore(s => s.saveCustomTemplate);
@@ -277,7 +422,7 @@ export default function Dashboard() {
   /* ─── Derived Data (all from Zustand store, memoized for performance) ─── */
 
   const allCompleted = useMemo(() =>
-    (Object.values(entries) as any[])
+    (Object.values(entries) as DailyEntry[])
       .filter(e => e.completed)
       .sort((a, b) => a.date.localeCompare(b.date)),
     [entries]
@@ -306,9 +451,14 @@ export default function Dashboard() {
 
   /* ─── Engine Calculations (all from real data) ─── */
 
+  const scoreOptions = useMemo(() => ({ tasks, bodyHabits }), [tasks, bodyHabits]);
   const todayScore = useMemo(() =>
-    todayEntry ? calculateScore(todayEntry) : null,
-    [todayEntry]
+    todayEntry ? calculateScore(todayEntry, scoreOptions) : null,
+    [todayEntry, scoreOptions]
+  );
+  const todayBreakdown = useMemo(() =>
+    todayEntry ? calculateScoreBreakdown(todayEntry, scoreOptions) : null,
+    [todayEntry, scoreOptions]
   );
 
   const pattern = useMemo(() => detectPattern(allCompleted), [allCompleted]);
@@ -322,8 +472,10 @@ export default function Dashboard() {
 
   const handleApplySuggestion = (sig: any) => {
     if (sig.actionType === 'switch_template' && sig.actionPayload?.systemType) {
-      if (sig.actionPayload.systemType === 'recovery') {
-        setActiveTemplate('recovery');
+      const requestedSystem = sig.actionPayload.systemType;
+      const templateTargetId = requestedSystem === 'balanced' ? 'execution' : requestedSystem;
+      if (templateTargetId === 'domination' || templateTargetId === 'execution' || templateTargetId === 'recovery') {
+        setActiveTemplate(templateTargetId);
       }
     } else if (sig.actionType === 'add_block') {
       const currentStructure = getActiveTemplateStructure() || [];
@@ -360,36 +512,52 @@ export default function Dashboard() {
     if (last7Days.length === 0) return null;
     const n = last7Days.length;
     return {
-      score: Math.round(last7Days.reduce((s: number, e: any) => s + calculateScore(e).score, 0) / n),
-      sleep: (last7Days.reduce((s: number, e: any) => s + (e.totalSleepHours || 0), 0) / n).toFixed(1),
-      energy: (last7Days.reduce((s: number, e: any) => s + (e.energyLevel || 0), 0) / n).toFixed(1),
-      focus: Math.round(last7Days.reduce((s: number, e: any) => s + ((e.dw1FocusQuality || 0) + (e.dw2FocusQuality || 0)) / 2, 0) / n * 10),
-      gymDays: last7Days.filter((e: any) => e.gymTraining === 'completed').length,
-      output: (last7Days.reduce((s: number, e: any) => s + (e.outputScore || 0), 0) / n).toFixed(1),
+      score: Math.round(last7Days.reduce((sum, entry) => sum + calculateScore(entry).score, 0) / n),
+      execution: Math.round(last7Days.reduce((sum, entry) => sum + getExecutionSignal(entry), 0) / n),
+      condition: Math.round(last7Days.reduce((sum, entry) => sum + getConditionSignal(entry), 0) / n),
+      integrity: Math.round(last7Days.reduce((sum, entry) => sum + getIntegritySignal(entry), 0) / n),
+      focus: Math.round(last7Days.reduce((sum, entry) => sum + getDeepWorkSignal(entry), 0) / n),
+      body: Math.round(last7Days.reduce((sum, entry) => sum + getBodySignal(entry), 0) / n),
+      gymDays: last7Days.filter((entry) => hasCompletedBodyRoutine(entry)).length,
+      bodyDays: last7Days.filter((entry) => hasCompletedBodyRoutine(entry)).length,
+      production: Math.round(last7Days.reduce((sum, entry) => sum + getProductionSignal(entry), 0) / n),
     };
   }, [last7Days]);
 
   /* ─── Chart Data (last 7 days for DW, last 30 for score) ─── */
 
-  const deepWorkChartData = useMemo(() =>
-    last7Days.map((e: any) => ({
-      date: format(parseISO(e.date), 'MMM dd'),
-      focus: Math.round(((e.dw1FocusQuality || 0) + (e.dw2FocusQuality || 0)) / 2 * 10),
-      hours: parseFloat(e.dw1Output || '0') || 0,
-    })),
-    [last7Days]
+  const graphEntries = useMemo(() => last30Days.slice(-10), [last30Days]);
+  const focusGraphSeries = useMemo(
+    () =>
+      graphEntries.map((entry) => {
+        const minutes = getDeepWorkMinutes(entry);
+        return {
+          date: format(parseISO(entry.date), 'MM/dd'),
+          primary: clamp(getDeepWorkSignal(entry), 0, 100),
+          secondary: clamp(Math.round((minutes / 180) * 100), 0, 100),
+          primaryText: `${getDeepWorkSignal(entry)}%`,
+          secondaryText: `${minutes}m`,
+        };
+      }),
+    [graphEntries]
   );
-
-  const scoreChartData = useMemo(() =>
-    last30Days.map((e: any) => ({
-      date: format(parseISO(e.date), 'MMM dd'),
-      score: calculateScore(e).score,
-    })),
-    [last30Days]
+  const scoreGraphSeries = useMemo(
+    () =>
+      graphEntries.map((entry) => {
+        const score = calculateScore(entry).score;
+        const production = getProductionSignal(entry);
+        return {
+          date: format(parseISO(entry.date), 'MM/dd'),
+          primary: clamp(score, 0, 100),
+          secondary: clamp(production, 0, 100),
+          primaryText: `${score}%`,
+          secondaryText: `${production}%`,
+        };
+      }),
+    [graphEntries]
   );
-
-  const hasDeepWorkChart = last7Days.length >= 2;
-  const hasScoreChart = last30Days.length >= 2;
+  const hasFocusGraph = focusGraphSeries.length >= 2;
+  const hasScoreGraph = scoreGraphSeries.length >= 2;
 
   /* ─── Display Values (today + fallback to weekly avg) ─── */
 
@@ -397,10 +565,10 @@ export default function Dashboard() {
   const displayState = todayScore?.state ?? (weeklyAvg ? 'STABLE' : '—');
 
   const deepWorkDisplay = todayEntry
-    ? (((todayEntry.dw1FocusQuality || 0) + (todayEntry.dw2FocusQuality || 0)) / 2 * 10).toFixed(0)
+    ? String(getDeepWorkSignal(todayEntry))
     : weeklyAvg ? `${weeklyAvg.focus}` : '—';
 
-  const gymDisplay = todayEntry?.gymTraining === 'completed'
+  const bodyDisplay = todayEntry && hasBodyRoutineConfigured(todayEntry)
     ? '✓'
     : todayEntry?.gymTraining === 'partial'
       ? '◐'
@@ -408,10 +576,13 @@ export default function Dashboard() {
 
   // Best active streak
   const bestStreak = Math.max(streaks.gym, streaks.deepWork, streaks.earlyWake, streaks.highScore);
-  const bestStreakLabel = bestStreak === streaks.gym ? 'GYM'
+  const bestStreakLabel = bestStreak === streaks.gym ? 'BODY'
     : bestStreak === streaks.deepWork ? 'FOCUS'
       : bestStreak === streaks.earlyWake ? 'WAKE'
         : 'SCORE';
+  const resolvedBodyDisplay = todayEntry && hasBodyRoutineConfigured(todayEntry)
+    ? `${getBodySignal(todayEntry)}%`
+    : weeklyAvg ? `${weeklyAvg.bodyDays}/7` : bodyDisplay;
 
   const activeGoalSignals = useMemo(() => {
     const goalStats = computeAllGoals(goals, tasks, allCompleted as DailyEntry[]);
@@ -424,11 +595,41 @@ export default function Dashboard() {
 
   const systemEvolutionLogs = useDailyStore(s => s.systemEvolutionLogs);
   const intensity = todayScore ? Math.max(0.1, todayScore.score / 100) : 0.05;
-  const executionValue = todayEntry ? calculateScoreBreakdown(todayEntry).execution : 0;
+  const executionValue = todayBreakdown?.execution ?? weeklyAvg?.execution ?? 0;
   const liveTasks = useMemo(() => tasks.filter(task => !task.completed), [tasks]);
   const pendingDeepCount = liveTasks.filter(task => task.energyType === 'deep').length;
   const pendingLightCount = liveTasks.filter(task => task.energyType !== 'deep').length;
   const executionRate = Math.round(executionValue);
+  const heroDateLabel = format(new Date(), 'EEE dd MMM');
+  const topGoal = activeGoalSignals[0];
+  const coreStats = [
+    { label: 'PREDICTION', value: `${prediction.expectedScore}` },
+    { label: 'BODY', value: resolvedBodyDisplay },
+    { label: 'GOAL', value: topGoal ? `${topGoal.computed.progress}%` : 'NONE' },
+  ];
+  const systemIntensityLabel = displayScore >= 85 ? 'PEAK LOAD' : displayScore >= 65 ? 'ATTACK READY' : displayScore >= 45 ? 'BUILDING' : 'RECOVERY REQUIRED';
+  const commandPills = [
+    { label: 'DATE', value: heroDateLabel, tone: 'default' as const },
+    { label: 'MODE', value: currentModeName, tone: 'default' as const },
+    { label: 'TREND', value: pattern.trend, tone: pattern.trend === 'RISING' ? 'positive' as const : pattern.trend === 'DECLINING' ? 'critical' as const : 'default' as const },
+    { label: 'RISK', value: risk.level === 'LOW' ? 'CONTROLLED' : risk.level, tone: risk.level === 'HIGH' ? 'critical' as const : 'default' as const },
+  ];
+  const summaryCards = [
+    { label: 'LIVE SCORE', value: displayScore, suffix: '', note: `${displayState} state` },
+    { label: 'EXECUTION', value: executionRate, suffix: '%', note: `${pendingDeepCount} deep tasks queued` },
+    { label: 'PREDICTION', value: prediction.expectedScore, suffix: '', note: prediction.trend },
+    { label: 'ACTIVE GOAL', value: topGoal ? topGoal.computed.progress : '--', suffix: topGoal ? '%' : '', note: topGoal ? topGoal.goal.title : 'No goal pressure detected' },
+  ];
+  const commandFeed = [
+    ...(actions.slice(0, 2).map((text) => ({ tag: 'ACTION', text, tone: 'default' as const }))),
+    ...(suggestions.slice(0, 2).map((item) => ({ tag: 'OPTIMIZE', text: item.message, tone: 'positive' as const }))),
+    ...(risk.signals.slice(0, 2).map((text) => ({ tag: 'RISK', text, tone: 'critical' as const }))),
+  ].slice(0, 4);
+  const breakdownItems = [
+    { label: 'Execution', value: todayBreakdown?.execution ?? weeklyAvg?.execution ?? 0, note: pendingDeepCount > 0 ? `${pendingDeepCount} deep tasks still open` : 'Execution load is under control' },
+    { label: 'Condition', value: todayBreakdown?.condition ?? weeklyAvg?.condition ?? 0, note: todayEntry?.totalSleepHours ? `${todayEntry.totalSleepHours.toFixed(1)}h sleep logged` : 'Condition will strengthen as recovery data appears' },
+    { label: 'Integrity', value: todayBreakdown?.integrity ?? weeklyAvg?.integrity ?? 0, note: topGoal ? `${topGoal.goal.title} driving current pressure` : 'Integrity is reading from plan adherence' },
+  ];
 
   const getSystemLine = (score: number) => {
     if (score > 75) return "All systems aligned. Maintain momentum.";
@@ -446,14 +647,14 @@ export default function Dashboard() {
   const systemLabel = isCriticalState ? 'CRITICAL • CORE ACTIVE' : 'SYSTEM ONLINE • CORE ACTIVE';
 
   return (
-    <div 
-      className="dashboard dash-ambient" 
-      style={{ 
+    <div
+      className="dashboard dash-ambient"
+      style={{
         position: 'relative', minHeight: '100vh', display: 'flex', flexDirection: 'column', gap: '32px',
         boxShadow: `0 0 ${12 * visual.glow}px rgba(255,255,255,0.04)`
       }}
     >
-      
+
       {/* ── REALISM LAYER: Cursor Light ── */}
       <div
         className="pointer-events-none"
@@ -478,8 +679,13 @@ export default function Dashboard() {
       <div style={{ ...depth.slow, position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none' }}></div>
 
       {/* ── SYSTEM PRESENCE HEADER (MEDIUM DEPTH) ── */}
-      <div style={{ ...depth.medium, marginBottom: '4px', paddingTop: '8px', zIndex: 1, position: 'relative' }}>
-        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ ...motionConfig.smooth, delay: dashboardSequence.heading }}>
+      <section className="dashboard-hero-grid" style={{ ...depth.medium, zIndex: 1, position: 'relative' }}>
+        <motion.div
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ ...motionConfig.smooth, delay: dashboardSequence.heading }}
+          className="dashboard-hero-copy"
+        >
           <AnimatePresence mode="wait">
             <motion.p
               key={systemLabel}
@@ -488,7 +694,7 @@ export default function Dashboard() {
               exit={{ opacity: 0, y: -4 }}
               transition={motionConfig.smooth}
               className={isCriticalState ? typeStyles.identityLabelCritical : typeStyles.identityLabel}
-              style={{ marginBottom: '10px', color: isCriticalState ? 'rgba(255, 140, 140, 0.85)' : undefined }}
+              style={{ marginBottom: '12px', color: isCriticalState ? 'rgba(255, 140, 140, 0.85)' : undefined }}
             >
               {systemLabel}
             </motion.p>
@@ -498,58 +704,132 @@ export default function Dashboard() {
             animate={{ opacity: 1, y: 0, letterSpacing: '0.085em' }}
             transition={{ ...motionConfig.smooth, delay: dashboardSequence.heading + 0.08 }}
             className={`${typeStyles.hero} text-white`}
-            style={{ margin: 0, fontSize: '44px', lineHeight: 0.94, fontWeight: 400 }}
+            style={{ margin: 0, fontSize: 'clamp(42px, 7vw, 82px)', lineHeight: 0.92, fontWeight: 400 }}
           >
             {formatHeadingText(currentModeName)}
           </motion.h1>
-          <p className={`${typeStyles.body} text-white`} style={{ opacity: 0.62, marginTop: '8px' }}>
-            {getSystemLine(displayScore)}
+          <p className="dashboard-hero-subtext">
+            {getSystemLine(displayScore)} The first screen now reflects the live adaptive system across score, execution pressure, recovery condition, and task flow.
           </p>
+          <div className="dashboard-command-pill-row">
+            {commandPills.map((item) => (
+              <CommandPill key={item.label} label={item.label} value={item.value} tone={item.tone} />
+            ))}
+          </div>
         </motion.div>
-      </div>
+
+        <GlassSurface delay={dashboardSequence.cards} variant={isCriticalState ? 'critical' : 'elevated'} className="dashboard-command-deck">
+          <div className="dashboard-deck-head">
+            <span className={typeStyles.label}>COMMAND DECK</span>
+            <span className="dashboard-deck-mode">{systemIntensityLabel}</span>
+          </div>
+          <div className="dashboard-deck-score-row">
+            <div>
+              <div className="dashboard-deck-score-label">CURRENT SCORE</div>
+              <div className="dashboard-deck-score-value">
+                <AnimatedMetric value={displayScore} className="score-number" />
+              </div>
+            </div>
+            <div className="dashboard-deck-state-cluster">
+              <span className="dashboard-deck-state">{displayState}</span>
+              <span className="dashboard-deck-trend">{prediction.trend}</span>
+            </div>
+          </div>
+          <div className="dashboard-breakdown-stack">
+            {breakdownItems.map((item) => (
+              <BreakdownRail key={item.label} label={item.label} value={item.value} note={item.note} />
+            ))}
+          </div>
+          <div className="dashboard-feed-stack">
+            {commandFeed.length > 0 ? commandFeed.map((item, index) => (
+              <FeedLine key={`${item.tag}-${index}`} tag={item.tag} text={item.text} tone={item.tone} />
+            )) : (
+              <FeedLine tag="READY" text="System feed is clean. More directives will appear as opportunities or risk patterns emerge." />
+            )}
+          </div>
+        </GlassSurface>
+      </section>
 
       {/* ── PHASE 8 PREDICTIVE INTELLIGENCE (FAST DEPTH) ── */}
-      {false && allCompleted.length >= 5 && (
+      {false && (prediction.expectedScore > 0 || actions.length > 0) && (
         <div style={{ ...depth.fast, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '24px', zIndex: 1, position: 'relative' }}>
           <GlassSurface i={0} delay={dashboardSequence.cards} variant="elevated" style={{ background: 'rgba(255,255,255,0.02)' }}>
-             <div className={typeStyles.label} style={{ marginBottom: '16px' }}>EXPECTED TODAY</div>
-             <div>
-                <AnimatedMetric value={prediction.expectedScore} className="metric-number-sm text-white" />
-                <div className="font-mono text-[11px] uppercase text-white" style={{ opacity: prediction.trend === 'RISING' ? 1 : prediction.trend === 'FALLING' ? 0.4 : 0.7, marginTop: '4px' }}>
-                  ({prediction.trend})
-                </div>
-             </div>
+            <div className={typeStyles.label} style={{ marginBottom: '16px' }}>EXPECTED TODAY</div>
+            <div>
+              <AnimatedMetric value={prediction.expectedScore} className="metric-number-sm text-white" />
+              <div className="font-mono text-[11px] uppercase text-white" style={{ opacity: prediction.trend === 'RISING' ? 1 : prediction.trend === 'FALLING' ? 0.4 : 0.7, marginTop: '4px' }}>
+                ({prediction.trend})
+              </div>
+            </div>
           </GlassSurface>
           <GlassSurface i={1} delay={dashboardSequence.cards + 0.08} variant="elevated" style={{ border: `1px solid rgba(255,255,255,${visual.border})`, boxShadow: `0 0 ${20 * visual.glow}px rgba(255,255,255,0.1)` }}>
-             <div className={typeStyles.label} style={{ marginBottom: '16px', opacity: 0.7 }}>SYSTEM DIRECTIVES</div>
-             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                {actions.map((act, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', marginTop: '-2px' }}>•</span>
-                    <span className={`${typeStyles.body} text-white`} style={{ lineHeight: 1.4 }}>{act}</span>
-                  </div>
-                ))}
-             </div>
+            <div className={typeStyles.label} style={{ marginBottom: '16px', opacity: 0.7 }}>SYSTEM DIRECTIVES</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {actions.map((act, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', marginTop: '-2px' }}>•</span>
+                  <span className={`${typeStyles.body} text-white`} style={{ lineHeight: 1.4 }}>{act}</span>
+                </div>
+              ))}
+            </div>
           </GlassSurface>
         </div>
       )}
 
       {/* ── PRIMARY ZONE (HERO - FAST DEPTH) ── */}
+      <section className="dashboard-summary-grid" style={{ ...depth.fast, zIndex: 1, position: 'relative' }}>
+        {summaryCards.map((item, index) => (
+          <motion.div
+            key={item.label}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...motionConfig.smooth, delay: dashboardSequence.cards + 0.06 + index * 0.05 }}
+          >
+            <SummaryMetricCard label={item.label} value={item.value} suffix={item.suffix} note={item.note} />
+          </motion.div>
+        ))}
+      </section>
+
       <div className="dashboard-primary-grid" style={{ ...depth.fast, zIndex: 1, position: 'relative' }}>
-        <GlassSurface i={0} delay={dashboardSequence.score} variant={intensity > 0.8 ? 'critical' : 'elevated'} className="dashboard-core-panel" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '312px', border: `1px solid rgba(255,255,255,${visual.border})`, paddingBlock: '18px' }}>
-          <HeroRadialScore score={displayScore} execution={executionValue} intensity={intensity} />
-          <span className={typeStyles.label} style={{ marginTop: '22px', zIndex: 2, opacity: 0.54 }}>SYSTEM SCORE</span>
+        <GlassSurface i={0} delay={dashboardSequence.score} variant={intensity > 0.8 ? 'critical' : 'elevated'} className="dashboard-core-panel" style={{ minHeight: '312px', border: `1px solid rgba(255,255,255,${visual.border})` }}>
+          <div className="dashboard-core-layout">
+            <div className="dashboard-core-visual">
+              <HeroRadialScore score={displayScore} execution={executionValue} intensity={intensity} />
+              <span className={typeStyles.label} style={{ marginTop: '18px', zIndex: 2, opacity: 0.54 }}>SYSTEM SCORE</span>
+            </div>
+            <div className="dashboard-core-copy">
+              <div className="dashboard-core-kicker">SYSTEM CORE</div>
+              <div className="dashboard-core-title">{systemIntensityLabel}</div>
+              <div className="dashboard-core-text">
+                {prediction.expectedScore > 0
+                  ? `Forecast is reading ${prediction.expectedScore} with a ${prediction.trend.toLowerCase()} trajectory.`
+                  : 'Forecast will sharpen as today receives more structured evidence.'}
+              </div>
+              <div className="dashboard-core-stats">
+                {coreStats.map((item) => (
+                  <div key={item.label} className="dashboard-core-stat">
+                    <span className="dashboard-core-stat-label">{item.label}</span>
+                    <span className="dashboard-core-stat-value">{item.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </GlassSurface>
 
-        <GlassSurface i={1} delay={dashboardSequence.cards} className="dashboard-terminal-panel" style={{ minHeight: '312px' }}>
-          <div className={typeStyles.label} style={{ marginBottom: '18px', opacity: 0.68 }}>EXECUTION HUD</div>
+        <GlassSurface i={1} delay={dashboardSequence.cards} className="dashboard-terminal-panel dashboard-command-surface" style={{ minHeight: '312px' }}>
+          <div className="dashboard-terminal-head">
+            <span className={typeStyles.label} style={{ opacity: 0.68 }}>EXECUTION HUD</span>
+            <span className="dashboard-terminal-state">{topGoal ? 'GOAL PRESSURE LIVE' : 'SYSTEM FLOW LIVE'}</span>
+          </div>
           <div style={{ display: 'grid', gap: '12px' }}>
             {[
               { label: 'RATE', value: executionRate },
               { label: 'DEEP', value: pendingDeepCount },
               { label: 'LIGHT', value: pendingLightCount },
               { label: 'FOCUS', value: deepWorkDisplay },
-              { label: 'GYM', value: gymDisplay },
+              { label: 'BODY', value: resolvedBodyDisplay },
+              { label: 'PRED', value: prediction.expectedScore },
             ].map((item) => (
               <div key={item.label} className="dashboard-terminal-row">
                 <span className="font-mono dashboard-terminal-label">{item.label}</span>
@@ -558,17 +838,18 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="dashboard-terminal-rule" />
-          <div className="body" style={{ fontSize: '13px', opacity: 0.56, maxWidth: '240px' }}>
-            Core execution remains live even while the system is idle.
+          <div className="body" style={{ fontSize: '13px', opacity: 0.56, maxWidth: '320px' }}>
+            Core execution remains live even while the system is idle. The HUD mirrors score pressure, task load, and body compliance in one surface.
           </div>
         </GlassSurface>
       </div>
 
       {/* ── SECONDARY GRID (MEDIUM DEPTH) ── */}
-      <div className="dashboard-secondary-grid" style={{ ...depth.medium, zIndex: 1, position: 'relative' }}>
-        
+      <div className="dashboard-secondary-grid" style={{ ...depth.medium, zIndex: 1, position: 'relative', gridTemplateColumns: 'minmax(0, 1fr)' }}>
+
         {/* LEFT COMPUTE COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {false && (
           <GlassSurface i={3} delay={dashboardSequence.cards + 0.12} className="dashboard-scan-panel">
             <div className={typeStyles.label} style={{ marginBottom: '18px' }}>DIAGNOSTICS</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -578,7 +859,9 @@ export default function Dashboard() {
               <DiagnosticRow label="RISK LEVEL" value={risk.level === 'LOW' ? 'NONE' : risk.level} state={risk.level === 'HIGH' ? 'critical' : risk.level === 'LOW' ? 'stable' : 'none'} />
             </div>
           </GlassSurface>
+          )}
 
+          {false && (
           <GlassSurface i={8} delay={dashboardSequence.cards + 0.18} className="dashboard-scan-panel">
             <div className={typeStyles.label} style={{ marginBottom: '18px' }}>ACTIVE TARGET</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -605,9 +888,10 @@ export default function Dashboard() {
               )}
             </div>
           </GlassSurface>
+          )}
 
           {/* SYSTEM EVOLUTION LOG (PHASE 4) */}
-          {false && systemEvolutionLogs.length > 0 && (
+          {systemEvolutionLogs.length > 0 && (
             <GlassSurface i={4} delay={dashboardSequence.cards + 0.22}>
               <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span className={typeStyles.label}>EVOLUTION LOG</span>
@@ -629,11 +913,11 @@ export default function Dashboard() {
           )}
 
           {/* INTELLIGENCE SIGNALS */}
-          {false && (suggestions.length > 0 || risk.signals.length > 0) && (
+          {(suggestions.length > 0 || risk.signals.length > 0) && (
             <GlassSurface i={7} delay={dashboardSequence.cards + 0.26}>
               <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span className={typeStyles.label}>SYSTEM INTELLIGENCE</span>
-                <span className="font-mono text-[10px] uppercase text-white" style={{ opacity: 0.8 }}>{suggestions.length} ALIVE</span>
+                <span className="font-mono text-[10px] uppercase text-white" style={{ opacity: 0.8 }}>{suggestions.length + risk.signals.length} LIVE</span>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 {suggestions.slice(0, 3).map((sig, idx) => (
@@ -643,7 +927,7 @@ export default function Dashboard() {
                       <span className={`${typeStyles.body} text-white`} style={{ lineHeight: 1.4, opacity: 0.9 }}>{sig.message}</span>
                     </div>
                     {sig.actionType && (
-                      <button 
+                      <button
                         onClick={() => handleApplySuggestion(sig)}
                         className="font-primary-bold text-[12px] uppercase"
                         style={{ background: 'rgba(255,255,255,0.9)', color: '#000', border: 'none', padding: '6px 16px', borderRadius: '6px', fontSize: '10px', fontWeight: 600, letterSpacing: '0.1em', cursor: 'pointer', marginTop: '12px' }}
@@ -653,12 +937,20 @@ export default function Dashboard() {
                     )}
                   </div>
                 ))}
+                {risk.signals.slice(0, 2).map((signal, idx) => (
+                  <div key={`risk-${idx}`} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', padding: '16px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ color: 'rgba(255,220,160,0.7)', fontSize: '14px' }}>!</span>
+                      <span className={`${typeStyles.body} text-white`} style={{ lineHeight: 1.4, opacity: 0.86 }}>{signal}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </GlassSurface>
           )}
         </div>
 
-        {/* RIGHT VISUALS COLUMN */}
+        {false && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           {/* QUICK METRICS HUD */}
           <GlassSurface i={4} delay={dashboardSequence.hud} className="dashboard-scan-panel">
@@ -667,10 +959,10 @@ export default function Dashboard() {
               <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>{todayEntry ? 'TODAY' : weeklyAvg ? 'AVG' : '—'}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <SignalBarMap label="SLEEP" value={todayEntry ? todayEntry.totalSleepHours || 0 : weeklyAvg ? parseFloat(weeklyAvg.sleep) || 0 : 0} max={10} />
-              <SignalBarMap label="ENERGY" value={todayEntry ? todayEntry.energyLevel || 0 : weeklyAvg ? parseFloat(weeklyAvg.energy) || 0 : 0} max={10} />
-              <SignalBarMap label="FOCUS" value={todayEntry ? Math.round(((todayEntry.dw1FocusQuality || 0) + (todayEntry.dw2FocusQuality || 0)) / 2 * 10) : weeklyAvg ? weeklyAvg.focus || 0 : 0} max={100} />
-              <SignalBarMap label="OUTPUT" value={todayEntry ? todayEntry.outputScore || 0 : weeklyAvg ? parseFloat(weeklyAvg.output) || 0 : 0} max={10} />
+              <SignalBarMap label="EXEC" value={todayBreakdown?.execution ?? weeklyAvg?.execution ?? 0} max={100} />
+              <SignalBarMap label="COND" value={todayBreakdown?.condition ?? weeklyAvg?.condition ?? 0} max={100} />
+              <SignalBarMap label="INTEG" value={todayBreakdown?.integrity ?? weeklyAvg?.integrity ?? 0} max={100} />
+              <SignalBarMap label="FOCUS" value={todayEntry ? getDeepWorkSignal(todayEntry) : weeklyAvg?.focus ?? 0} max={100} />
             </div>
           </GlassSurface>
 
@@ -678,24 +970,15 @@ export default function Dashboard() {
           <GlassSurface i={5} delay={dashboardSequence.hud + 0.08} className="dashboard-scan-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
               <span className={typeStyles.label}>FOCUS SIGNAL</span>
-              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>7D</span>
+              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>LAST 10 DAYS</span>
             </div>
-            <div style={{ height: 180 }} className="dashboard-chart-shell">
-              {hasDeepWorkChart ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={deepWorkChartData} margin={{ top: 5, right: 5, bottom: 5, left: -20 }}>
-                    <defs>
-                      <linearGradient id="dwGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#fff" stopOpacity={0.05} />
-                        <stop offset="100%" stopColor="#fff" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }} axisLine={{ stroke: 'rgba(255,255,255,0.05)' }} tickLine={false} />
-                    <YAxis domain={[0, 100]} tick={{ fill: 'transparent' }} axisLine={false} tickLine={false} />
-                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.1)' }} />
-                    <Area type="monotone" dataKey="focus" stroke="rgba(255,255,255,0.4)" strokeWidth={2} fill="url(#dwGrad)" dot={{ fill: '#fff', r: 2, strokeWidth: 0 }} activeDot={{ fill: '#fff', r: 4, strokeWidth: 0 }} />
-                  </AreaChart>
-                </ResponsiveContainer>
+            <div className="dashboard-chart-shell dashboard-chart-shell--graph">
+              {hasFocusGraph ? (
+                <SignalTimelineGraph
+                  series={focusGraphSeries}
+                  primaryLabel="Focus"
+                  secondaryLabel="Minutes"
+                />
               ) : (
                 <ChartPlaceholder />
               )}
@@ -706,24 +989,22 @@ export default function Dashboard() {
           <GlassSurface i={6} delay={dashboardSequence.hud + 0.16} className="dashboard-scan-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
               <span className={typeStyles.label}>TIMELINE</span>
-              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>30D</span>
+              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>LAST 10 DAYS</span>
             </div>
-            <div style={{ height: 180 }} className="dashboard-chart-shell">
-              {hasScoreChart ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={scoreChartData} margin={{ top: 5, right: 5, bottom: 5, left: -20 }}>
-                    <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.2)', fontSize: 10 }} axisLine={{ stroke: 'rgba(255,255,255,0.05)' }} tickLine={false} />
-                    <YAxis domain={[0, 100]} tick={{ fill: 'transparent' }} axisLine={false} tickLine={false} />
-                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: 'rgba(255,255,255,0.1)' }} />
-                    <Line type="monotone" dataKey="score" stroke="rgba(255,255,255,0.4)" strokeWidth={2} dot={{ fill: '#fff', r: 2, strokeWidth: 0 }} activeDot={{ fill: '#fff', r: 4, strokeWidth: 0 }} />
-                  </LineChart>
-                </ResponsiveContainer>
+            <div className="dashboard-chart-shell dashboard-chart-shell--graph">
+              {hasScoreGraph ? (
+                <SignalTimelineGraph
+                  series={scoreGraphSeries}
+                  primaryLabel="Score"
+                  secondaryLabel="Production"
+                />
               ) : (
                 <ChartPlaceholder label="BASELINE FORMING..." message="Awaiting score history" />
               )}
             </div>
           </GlassSurface>
         </div>
+        )}
       </div>
 
       {/* ── EMPTY STATE ── */}

@@ -171,15 +171,14 @@ export default function LoginScreen({ onBack }: { onBack?: () => void }) {
                     resetError();
                   }}
                   onKeyDown={handleKeyDown}
-                  placeholder="enter operator id"
+                  placeholder="operator@domain.com"
                   autoFocus
                 />
               </label>
 
               <label
-                className={`auth-field auth-field--minimal auth-field--optional${name ? ' has-value' : ''}${
-                  mode === 'signup' ? ' is-visible' : ''
-                }`}
+                className={`auth-field auth-field--minimal auth-field--optional${name ? ' has-value' : ''}${mode === 'signup' ? ' is-visible' : ''
+                  }`}
                 aria-hidden={mode !== 'signup'}
               >
                 <span className="auth-label">OPERATOR NAME</span>
@@ -212,9 +211,8 @@ export default function LoginScreen({ onBack }: { onBack?: () => void }) {
               </label>
 
               <label
-                className={`auth-field auth-field--minimal auth-field--optional${confirmPassword ? ' has-value' : ''}${
-                  mode === 'signup' ? ' is-visible' : ''
-                }`}
+                className={`auth-field auth-field--minimal auth-field--optional${confirmPassword ? ' has-value' : ''}${mode === 'signup' ? ' is-visible' : ''
+                  }`}
                 aria-hidden={mode !== 'signup'}
               >
                 <span className="auth-label">CONFIRM KEY</span>

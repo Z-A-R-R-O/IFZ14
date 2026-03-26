@@ -51,7 +51,7 @@ export default function SystemControlPanel({ isOpen, onClose, selectedDate, onDa
     if (!confirmReset) { setConfirmReset(true); return; }
     const date = selectedDate || today;
     updateEntry(date, {
-      totalSleepHours: 0, actualWakeTime: '', energyLevel: 0,
+      totalSleepHours: 0, actualWakeTime: '', efficiencyRating: 0,
       gymTraining: 'skipped', jawlineWorkout: false,
       dw1FocusQuality: 0, dw2FocusQuality: 0,
       productionOutput: '', outputScore: 0, dailyLessons: '',

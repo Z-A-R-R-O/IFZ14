@@ -1,8 +1,15 @@
-import type { Suggestion, TemplateDefinition } from '../types';
+import type { DayBlock, Suggestion, TemplateDefinition } from '../types';
 
 export interface AdaptationResult {
   templateAdjustments?: { recommendedSystemType: 'domination' | 'balanced' | 'recovery' | 'execution' };
-  blockAdjustments: { added: any[]; removed: string[] };
+  blockAdjustments: {
+    added: Array<{
+      blockType: DayBlock['type'];
+      customName?: string;
+      customType?: 'toggle' | 'number' | 'text';
+    }>;
+    removed: string[];
+  };
   weightAdjustments: { blockId: string; newWeight: number }[];
   summaryLog: string[];
 }

@@ -41,7 +41,7 @@ export function analyzeState(
     ? sleepVals.reduce((a, b) => a + b, 0) / sleepVals.length : 7);
 
   // Energy
-  const energyVals = recent.map(e => e.energyLevel || 0).filter(v => v > 0);
+  const energyVals = recent.map(e => e.efficiencyRating ?? e.energyLevel ?? 0).filter(v => v > 0);
   const avgEnergy = energyOverride ?? (energyVals.length > 0
     ? energyVals.reduce((a, b) => a + b, 0) / energyVals.length : 5);
 
@@ -559,7 +559,7 @@ export function determineAdaptiveQuestions(
   const questions: AdaptiveQuestion[] = [];
 
   // Always ask energy if we can't infer it
-  const recentEnergy = entries.slice(-1)[0]?.energyLevel;
+  const recentEnergy = entries.slice(-1)[0]?.efficiencyRating ?? entries.slice(-1)[0]?.energyLevel;
   if (!recentEnergy || entries.length < 3) {
     questions.push({
       id: 'energy',

@@ -52,13 +52,13 @@ function buildMemory(entries: DailyEntry[], streaks: ReturnType<typeof calculate
 
   const scored = entries.map(entry => ({ entry, score: calculateScore(entry).score }));
   const highest = [...scored].sort((left, right) => right.score - left.score)[0];
-  const lowestEnergy = [...entries].filter(entry => entry.energyLevel !== undefined).sort((left, right) => (left.energyLevel || 0) - (right.energyLevel || 0))[0];
+  const lowestEnergy = [...entries].filter(entry => (entry.efficiencyRating ?? entry.energyLevel) !== undefined).sort((left, right) => (left.efficiencyRating ?? left.energyLevel ?? 0) - (right.efficiencyRating ?? right.energyLevel ?? 0))[0];
   const deepest = [...entries].sort((left, right) => getDeepMinutes(right) - getDeepMinutes(left))[0];
 
   const lines = [
     highest ? `Highest output day recorded on ${formatArchiveDate(highest.entry.date)} at ${highest.score}.` : '',
     deepest ? `Longest deep work day logged on ${formatArchiveDate(deepest.date)} with ${Math.round(getDeepMinutes(deepest) / 60 * 10) / 10}h focused.` : '',
-    lowestEnergy ? `Lowest energy period occurred on ${formatArchiveDate(lowestEnergy.date)} at ${lowestEnergy.energyLevel || 0}/10.` : '',
+    lowestEnergy ? `Lowest efficiency period occurred on ${formatArchiveDate(lowestEnergy.date)} at ${lowestEnergy.efficiencyRating ?? lowestEnergy.energyLevel ?? 0}/10.` : '',
     streaks.highScore > 0 ? `Longest active high-performance streak is ${streaks.highScore} days.` : '',
   ];
 
@@ -147,7 +147,7 @@ export default function Reports() {
       date: entry.date,
       score,
       state,
-      energy: entry.energyLevel || 0,
+      energy: entry.efficiencyRating ?? entry.energyLevel ?? 0,
       sleep: entry.totalSleepHours || 0,
       deepHours: Math.round((getDeepMinutes(entry) / 60) * 10) / 10,
     };
@@ -333,7 +333,7 @@ export default function Reports() {
                   {formatArchiveDate(item.date)}
                 </div>
                 <div className="body" style={{ fontSize: '13px', opacity: 0.56 }}>
-                  Score {item.score} | {item.deepHours}h deep | Sleep {item.sleep}h | Energy {item.energy}
+                  Score {item.score} | {item.deepHours}h deep | Sleep {item.sleep}h | Efficiency {item.energy}
                 </div>
               </div>
               <div className="font-mono" style={{ textAlign: 'right', fontSize: '11px', letterSpacing: '0.12em', color: 'rgba(255,255,255,0.74)' }}>

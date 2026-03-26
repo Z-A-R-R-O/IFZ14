@@ -13,6 +13,7 @@ import {
   analyzeWeeklyPerformance,
 } from '../engines/analyticsEngine';
 import { generateInsights } from '../engines/insightEngine';
+import { calculateScore } from '../engines/scoreEngine';
 import { dashboardSequence, motionTiming } from '../motion';
 import { type as typeStyles } from '../typography';
 import SystemSurface from '../ui/components/SystemSurface';
@@ -54,7 +55,7 @@ function getFocusSignal(entry: DailyEntry) {
 function getOutputSignal(entry: DailyEntry) {
   if ((entry.outputScore || 0) > 0) return Math.round((entry.outputScore || 0) * 10);
   if ((entry.productionScore || 0) > 0) return Math.round((entry.productionScore || 0) * 10);
-  return Math.round(entry.systemScore || 0);
+  return calculateScore(entry).score;
 }
 
 function buildLinePath(values: number[], width: number, height: number, padding: number) {
@@ -162,7 +163,7 @@ export default function Analytics() {
     return analyzeWeeklyPerformance(currentWeek, previousWeek, failures);
   }, [currentWeek, previousWeek, failures]);
 
-  const latestScore = todayEntry.completed ? todayEntry.systemScore || 0 : prediction.expectedScore;
+  const latestScore = todayEntry.completed ? calculateScore(todayEntry).score : prediction.expectedScore;
   const primarySignal = latestScore || prediction.expectedScore || 0;
   const trendState = getTrendState(weeklyAnalysis?.trend ?? null, prediction.trend);
   const riskState = getRiskState(weeklyAnalysis?.verdict ?? null, prediction.trend, latestScore);
@@ -212,7 +213,7 @@ export default function Analytics() {
   );
 
   const latestEntry = allEntries.length > 0 ? allEntries[allEntries.length - 1] : undefined;
-  const predictionDelta = Math.round(prediction.expectedScore - (latestEntry?.systemScore || 0));
+  const predictionDelta = Math.round(prediction.expectedScore - (latestEntry ? calculateScore(latestEntry).score : 0));
   const predictionStatements = useMemo(() => {
     const statements: string[] = [];
 
@@ -220,7 +221,7 @@ export default function Analytics() {
       `If current trend continues -> Output ${predictionDelta >= 0 ? '+' : ''}${predictionDelta}% against recent baseline`
     );
 
-    if ((todayEntry.totalSleepHours || 0) < 6.5 || (todayEntry.energyLevel || 0) < 5) {
+    if ((todayEntry.totalSleepHours || 0) < 6.5 || (todayEntry.efficiencyRating ?? todayEntry.energyLevel ?? 0) < 5) {
       statements.push('Recovery possible in 3 days if sleep stabilizes and load drops.');
     } else if (prediction.trend === 'RISING') {
       statements.push('Momentum can compound over the next 2 days if execution remains clean.');
@@ -229,7 +230,7 @@ export default function Analytics() {
     }
 
     return statements;
-  }, [predictionDelta, prediction.trend, todayEntry.energyLevel, todayEntry.totalSleepHours]);
+  }, [predictionDelta, prediction.trend, todayEntry.efficiencyRating, todayEntry.energyLevel, todayEntry.totalSleepHours]);
 
   const systemInsights = useMemo(() => {
     const lines = generatedInsights.map(insight => insight.text);

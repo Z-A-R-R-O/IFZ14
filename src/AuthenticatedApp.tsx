@@ -10,6 +10,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import DayLab from './pages/DayLab';
 import Timeline from './pages/Timeline';
+import Biometrics from './pages/Biometrics';
 
 function IdleWatcher({ children }: { children: ReactNode }) {
   const handleActivity = useCallback(() => {
@@ -41,6 +42,7 @@ export default function AuthenticatedApp() {
             <Route path="/timeline" element={<Timeline />} />
             <Route path="/goals" element={<Goals />} />
             <Route path="/reports" element={<Reports />} />
+            <Route path="/biometrics" element={<Biometrics />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
