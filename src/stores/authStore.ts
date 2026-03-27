@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { createPasswordPayload, normalizeEmail, verifyPassword } from '../lib/auth';
 import { STORAGE_NAMES } from '../config/identity';
+import { fetchAuthConfig, isRemoteAuthEnabled, remoteGetMe, remoteSignIn, remoteSignUp, writeSessionToken } from '../lib/api/auth';
 
 export type AuthUser = {
   id: string;
@@ -26,6 +27,7 @@ interface AuthState {
   user: AuthUser | null;
   isLocked: boolean;
   users: StoredAuthUser[];
+  remoteSessionEnabled: boolean;
   initialize: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<AuthResult>;
   signUp: (input: { name?: string; email: string; password: string }) => Promise<AuthResult>;
@@ -130,6 +132,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       isLocked: false,
       users: [],
+      remoteSessionEnabled: false,
 
       markHydrated: () => set({ hydrated: true }),
 
@@ -137,6 +140,30 @@ export const useAuthStore = create<AuthState>()(
         const migratedUsers = await migrateLegacyUsers(get().users);
         if (migratedUsers !== get().users) {
           set({ users: migratedUsers });
+        }
+
+        if (!isRemoteAuthEnabled()) return;
+
+        try {
+          const config = await fetchAuthConfig();
+          set({ remoteSessionEnabled: Boolean(config.sessionAuthEnabled) });
+
+          if (config.sessionAuthEnabled) {
+            const user = await remoteGetMe();
+            if (user) {
+              set({
+                user: {
+                  id: user.id,
+                  email: user.email,
+                  name: user.name,
+                  createdAt: new Date().toISOString(),
+                },
+                isLocked: false,
+              });
+            }
+          }
+        } catch {
+          set({ remoteSessionEnabled: false });
         }
       },
 
@@ -146,6 +173,25 @@ export const useAuthStore = create<AuthState>()(
 
         if (!normalizedEmail) return { ok: false, error: 'Email required' };
         if (!passwordValue) return { ok: false, error: 'Password required' };
+
+        if (get().remoteSessionEnabled) {
+          try {
+            const result = await remoteSignIn(normalizedEmail, passwordValue);
+            writeSessionToken(result.sessionToken || null);
+            set({
+              user: {
+                id: result.user!.id,
+                email: result.user!.email,
+                name: result.user!.name,
+                createdAt: new Date().toISOString(),
+              },
+              isLocked: false,
+            });
+            return { ok: true };
+          } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : 'Authorization failed' };
+          }
+        }
 
         const migratedUsers = await migrateLegacyUsers(get().users);
         if (migratedUsers !== get().users) set({ users: migratedUsers });
@@ -184,6 +230,25 @@ export const useAuthStore = create<AuthState>()(
           return { ok: false, error: 'Use at least 8 characters' };
         }
 
+        if (get().remoteSessionEnabled) {
+          try {
+            const result = await remoteSignUp({ name: trimmedName, email: normalizedEmail, password: passwordValue });
+            writeSessionToken(result.sessionToken || null);
+            set({
+              user: {
+                id: result.user!.id,
+                email: result.user!.email,
+                name: result.user!.name,
+                createdAt: new Date().toISOString(),
+              },
+              isLocked: false,
+            });
+            return { ok: true };
+          } catch (error) {
+            return { ok: false, error: error instanceof Error ? error.message : 'Unable to configure account' };
+          }
+        }
+
         const migratedUsers = await migrateLegacyUsers(get().users);
         if (migratedUsers !== get().users) set({ users: migratedUsers });
 
@@ -213,6 +278,7 @@ export const useAuthStore = create<AuthState>()(
       },
 
       signOut: () => {
+        writeSessionToken(null);
         set({ user: null, isLocked: false });
       },
 
@@ -224,6 +290,23 @@ export const useAuthStore = create<AuthState>()(
       unlock: async (password) => {
         const currentUser = get().user;
         if (!currentUser) return false;
+
+        if (get().remoteSessionEnabled) {
+          try {
+            const result = await remoteSignIn(currentUser.email, password);
+            writeSessionToken(result.sessionToken || null);
+            set({
+              user: {
+                ...currentUser,
+                name: result.user?.name || currentUser.name,
+              },
+              isLocked: false,
+            });
+            return true;
+          } catch {
+            return false;
+          }
+        }
 
         const matchedUser = get().users.find((entry) => entry.id === currentUser.id);
         if (!matchedUser) return false;
@@ -253,6 +336,7 @@ export const useAuthStore = create<AuthState>()(
         user: state.user,
         isLocked: state.isLocked,
         users: state.users,
+        remoteSessionEnabled: state.remoteSessionEnabled,
       }),
       onRehydrateStorage: () => (state) => {
         state?.markHydrated();

@@ -60,7 +60,7 @@ export function BodyBlock({
             e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
           }}
         >
-          OPEN LAB â†’
+          OPEN LAB
         </button>
       </div>
 

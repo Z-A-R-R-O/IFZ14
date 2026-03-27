@@ -30,6 +30,7 @@ export default function Daily() {
   const {
     activeTemplate,
     duplicateSection,
+    entries,
     entry,
     handleOpenAutoDay,
     handleOpenBuilder,
@@ -76,7 +77,7 @@ export default function Daily() {
             className="daily-date-row"
           >
             <button type="button" className="daily-date-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
-              ←
+              PREV
             </button>
             <div className="daily-date-label-group">
               <p className={typeStyles.label} style={{ marginBottom: 0 }}>
@@ -85,7 +86,7 @@ export default function Daily() {
               {isToday(new Date(selectedDate)) ? <span className="daily-date-today">TODAY</span> : null}
             </div>
             <button type="button" className="daily-date-arrow" onClick={() => shiftDay(1)} aria-label="Next day">
-              →
+              NEXT
             </button>
           </motion.div>
           <div style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}>
@@ -195,7 +196,7 @@ export default function Daily() {
                       {index !== activeTemplate.length - 1 ? <div className="daily-flow-line" /> : null}
                     </div>
                     <div className="daily-flow-content">
-                      {block.type === 'wake' && <DailyWakeBlock entry={entry} update={update} visual={visual} />}
+                      {block.type === 'wake' && <DailyWakeBlock entry={entry} entries={entries} update={update} visual={visual} />}
                       {block.type === 'body' && <DailyBodyBlock entry={entry} update={update} visual={visual} />}
                       {block.type === 'deep_work' && (
                         <DailyDeepWorkBlock
@@ -224,8 +225,8 @@ export default function Daily() {
               <div className="daily-system-footer-readout" style={{ display: 'flex', gap: '18px', alignItems: 'baseline' }}>
                 <span className={typeStyles.label}>System Load</span>
                 <AnimatedMetric value={liveScore.score} className="system-output-pulse metric-number-sm text-white" />
-                <motion.span key={liveScore.state} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="daily-system-footer-state" data-statelabel={`STATE: ${liveScore.state} ${pattern.trend === 'RISING' ? '↑' : pattern.trend === 'DECLINING' ? '↓' : '→'}`} style={{ fontSize: '13px', letterSpacing: '0.12em', color: '#888' }}>
-                  {liveScore.state} {pattern.trend === 'RISING' ? '↑' : pattern.trend === 'DECLINING' ? '↓' : '→'}
+<motion.span key={liveScore.state} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="daily-system-footer-state" data-statelabel={`STATE: ${liveScore.state} ${pattern.trend === 'RISING' ? 'UP' : pattern.trend === 'DECLINING' ? 'DOWN' : 'FLAT'}`} style={{ fontSize: '13px', letterSpacing: '0.12em', color: '#888' }}>
+                  {liveScore.state} {pattern.trend === 'RISING' ? 'UP' : pattern.trend === 'DECLINING' ? 'DOWN' : 'FLAT'}
                 </motion.span>
               </div>
               <AnimatePresence>
@@ -238,6 +239,7 @@ export default function Daily() {
     </div>
   );
 }
+
 
 
 

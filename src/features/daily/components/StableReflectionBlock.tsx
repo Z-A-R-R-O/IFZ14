@@ -150,7 +150,7 @@ export function StableReflectionBlock({ entry, update, visual }: StableReflectio
                     disabled={step === 0}
                     className="task-wizard-nav task-wizard-nav-back"
                   >
-                    <span className="task-wizard-nav-icon">&larr;</span>
+                    <span className="task-wizard-nav-icon">BACK</span>
                     <span className="task-wizard-nav-text">Back</span>
                   </button>
                   <div className="wizard-label" style={{ justifySelf: 'center' }}>REFLECTION</div>
@@ -158,9 +158,9 @@ export function StableReflectionBlock({ entry, update, visual }: StableReflectio
                     type="button"
                     onClick={closeReflection}
                     className="task-wizard-nav task-wizard-nav-close"
+                    aria-label="Close reflection"
                   >
-                    <span className="task-wizard-nav-text">Close</span>
-                    <span className="task-wizard-nav-icon">&times;</span>
+                    <span className="task-wizard-nav-icon">X</span>
                   </button>
                 </div>
                 <div className="task-wizard-progress" style={{ justifyContent: 'center' }}>

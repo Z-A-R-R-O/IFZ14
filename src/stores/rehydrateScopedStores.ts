@@ -16,5 +16,9 @@ const scopedStores = [
 
 export async function rehydrateScopedStores() {
   await Promise.all(scopedStores.map((store) => store.persist.rehydrate()));
+  await useAnalyticsStore.getState().hydrateFromRemote();
+  await useGoalStore.getState().hydrateFromRemote();
+  await useTaskStore.getState().hydrateFromRemote();
+  await useDailyStore.getState().hydrateFromRemote();
   useDailyStore.getState().recomputeAllScores();
 }

@@ -1,157 +1,32 @@
-import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import AnimatedMetric from '../components/AnimatedMetric';
-import { calculateScore } from '../engines/scoreEngine';
-import { avg, analyzeFailures, analyzeWeeklyPerformance, calculateGoalImpact } from '../engines/analyticsEngine';
-import { generateInsights } from '../engines/insightEngine';
-import { detectPattern } from '../engines/patternEngine';
-import { calculateStreaks } from '../engines/streakEngine';
-import { useDailyStore } from '../stores/dailyStore';
-import { useGoalStore } from '../stores/goalStore';
-import { useTaskStore } from '../stores/taskStore';
 import { type as typeStyles } from '../typography';
-import type { DailyEntry } from '../types';
 import SystemSurface from '../ui/components/SystemSurface';
 import { fadeInUp } from '../ui/motion/presets';
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function getDeepMinutes(entry: DailyEntry) {
-  if (entry.dynamic_values?.dwSessions?.length) {
-    return entry.dynamic_values.dwSessions.reduce((sum: number, session: any) => sum + (session.duration || 60), 0);
-  }
-
-  const qualities = [entry.dw1FocusQuality || 0, entry.dw2FocusQuality || 0].filter(Boolean);
-  return qualities.reduce((sum, quality) => sum + quality * 12, 0);
-}
-
-function getFocusSignal(entry: DailyEntry) {
-  if (entry.dynamic_values?.dwSessions?.length) {
-    return avg(entry.dynamic_values.dwSessions.map((session: any) => session.focus || 0));
-  }
-
-  const qualities = [entry.dw1FocusQuality || 0, entry.dw2FocusQuality || 0].filter(Boolean);
-  return qualities.length > 0 ? avg(qualities) * 10 : 0;
-}
-
-function formatTrend(trend: ReturnType<typeof detectPattern>['trend']) {
-  if (trend === 'RISING') return 'IMPROVING';
-  if (trend === 'DECLINING') return 'DECLINING';
-  if (trend === 'VOLATILE') return 'VOLATILE';
-  return 'STABLE';
-}
-
-function formatArchiveDate(date: string) {
-  return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(date));
-}
-
-function buildMemory(entries: DailyEntry[], streaks: ReturnType<typeof calculateStreaks>) {
-  if (entries.length === 0) return [];
-
-  const scored = entries.map(entry => ({ entry, score: calculateScore(entry).score }));
-  const highest = [...scored].sort((left, right) => right.score - left.score)[0];
-  const lowestEnergy = [...entries].filter(entry => (entry.efficiencyRating ?? entry.energyLevel) !== undefined).sort((left, right) => (left.efficiencyRating ?? left.energyLevel ?? 0) - (right.efficiencyRating ?? right.energyLevel ?? 0))[0];
-  const deepest = [...entries].sort((left, right) => getDeepMinutes(right) - getDeepMinutes(left))[0];
-
-  const lines = [
-    highest ? `Highest output day recorded on ${formatArchiveDate(highest.entry.date)} at ${highest.score}.` : '',
-    deepest ? `Longest deep work day logged on ${formatArchiveDate(deepest.date)} with ${Math.round(getDeepMinutes(deepest) / 60 * 10) / 10}h focused.` : '',
-    lowestEnergy ? `Lowest efficiency period occurred on ${formatArchiveDate(lowestEnergy.date)} at ${lowestEnergy.efficiencyRating ?? lowestEnergy.energyLevel ?? 0}/10.` : '',
-    streaks.highScore > 0 ? `Longest active high-performance streak is ${streaks.highScore} days.` : '',
-  ];
-
-  return lines.filter(Boolean).slice(0, 4);
-}
+import { useReportsModel } from '../features/reports/hooks/useReportsModel';
+import { formatArchiveDate, formatTrend } from '../features/reports/lib/archive';
 
 export default function Reports() {
-  const entries = useDailyStore(state => state.entries);
-  const goals = useGoalStore(state => state.goals);
-  const tasks = useTaskStore(state => state.tasks);
-
-  const allEntries = useMemo(
-    () =>
-      (Object.values(entries) as DailyEntry[])
-        .filter(entry => entry.completed)
-        .sort((left, right) => left.date.localeCompare(right.date)),
-    [entries]
-  );
-
-  const collectedDays = allEntries.length;
-  const baselineDays = 3;
-
-  const recentWindow = allEntries.slice(-7);
-  const previousWindow = allEntries.slice(-14, -7);
-  const recentScores = recentWindow.map(entry => calculateScore(entry).score);
-  const deepMinutes = recentWindow.map(getDeepMinutes);
-  const focusSignals = recentWindow.map(getFocusSignal).filter(value => value > 0);
-  const trend = detectPattern(allEntries);
-  const streaks = calculateStreaks(allEntries);
-  const insightLines = generateInsights(allEntries).map(insight => insight.text);
-  const failures = analyzeFailures(recentWindow);
-  const weekly = analyzeWeeklyPerformance(recentWindow, previousWindow, failures);
-  const goalImpact = calculateGoalImpact(goals, tasks, recentWindow, previousWindow).slice(0, 4);
-
-  const consistency = useMemo(() => {
-    if (recentScores.length < 2) return collectedDays >= baselineDays ? 100 : 0;
-    const diffs = recentScores.slice(1).map((score, index) => Math.abs(score - recentScores[index]));
-    return clamp(Math.round(100 - avg(diffs) * 3.4), 0, 100);
-  }, [collectedDays, recentScores]);
-
-  const riskLabel = useMemo(() => {
-    const criticalDays = recentScores.filter(score => score < 45).length;
-    if (criticalDays >= 2 || trend.trend === 'DECLINING') return 'RISING';
-    if (trend.trend === 'VOLATILE') return 'VARIABLE';
-    return 'CONTROLLED';
-  }, [recentScores, trend.trend]);
-
-  const averageScore = recentScores.length > 0 ? Math.round(avg(recentScores)) : 0;
-  const deepHours = Math.round((avg(deepMinutes) / 60) * 10) / 10;
-  const lightMinutes = useMemo(() => {
-    const recentDates = new Set(recentWindow.map(entry => entry.date));
-    const recentTasks = tasks.filter(task => task.completedAt && recentDates.has(task.completedAt.slice(0, 10)));
-    const light = recentTasks
-      .filter(task => task.energyType !== 'deep')
-      .reduce((sum, task) => sum + (task.completedTime || task.estimatedTime || 0), 0);
-    return light;
-  }, [recentWindow, tasks]);
-  const activeMinutes = deepMinutes.reduce((sum, value) => sum + value, 0) + lightMinutes;
-  const idleMinutes = clamp(recentWindow.length * 16 * 60 - activeMinutes, 0, recentWindow.length * 16 * 60);
-  const totalTrackedMinutes = Math.max(activeMinutes + idleMinutes, 1);
-  const timeDistribution = [
-    { label: 'DEEP WORK', value: deepMinutes.reduce((sum, value) => sum + value, 0), accent: 'rgba(168, 219, 188, 0.88)' },
-    { label: 'LIGHT WORK', value: lightMinutes, accent: 'rgba(255,255,255,0.82)' },
-    { label: 'IDLE', value: idleMinutes, accent: 'rgba(255,255,255,0.38)' },
-  ];
-
-  const completionRate = useMemo(() => {
-    const recentDates = new Set(recentWindow.map(entry => entry.date));
-    const created = tasks.filter(task => recentDates.has(task.createdAt.slice(0, 10))).length;
-    const completed = tasks.filter(task => task.completedAt && recentDates.has(task.completedAt.slice(0, 10))).length;
-    if (created === 0 && completed === 0) return 0;
-    return clamp(Math.round((completed / Math.max(created, completed, 1)) * 100), 0, 100);
-  }, [recentWindow, tasks]);
-  const efficiency = focusSignals.length > 0 ? Math.round(avg(focusSignals)) : 0;
-  const focusStability = focusSignals.length > 1 ? clamp(Math.round(100 - avg(focusSignals.slice(1).map((value, index) => Math.abs(value - focusSignals[index])))), 0, 100) : 0;
-
-  const patternMemory = [
-    trend.description.replace(/[^\x20-\x7E]/g, ''),
-    ...insightLines.slice(0, 3),
-  ].filter(Boolean).slice(0, 4);
-
-  const memoryLines = buildMemory(allEntries, streaks);
-  const archiveTimeline = recentWindow.slice(-7).map(entry => {
-    const { score, state } = calculateScore(entry);
-    return {
-      date: entry.date,
-      score,
-      state,
-      energy: entry.efficiencyRating ?? entry.energyLevel ?? 0,
-      sleep: entry.totalSleepHours || 0,
-      deepHours: Math.round((getDeepMinutes(entry) / 60) * 10) / 10,
-    };
-  });
+  const {
+    archiveTimeline,
+    averageScore,
+    baselineDays,
+    collectedDays,
+    completionRate,
+    consistency,
+    deepHours,
+    efficiency,
+    failures,
+    focusStability,
+    goalImpact,
+    memoryLines,
+    patternMemory,
+    riskLabel,
+    timeDistribution,
+    totalTrackedMinutes,
+    trend,
+    weekly,
+  } = useReportsModel();
 
   if (collectedDays < baselineDays) {
     return (

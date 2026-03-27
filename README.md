@@ -102,3 +102,74 @@ The IFZ14 Tracker is a **local-first application**. To ensure zero latency and o
 IFZ14 Tracker is a high-integration performance tool that treats human behavior as a system to be optimized. The codebase is highly modular, with a clean separation between raw data (`stores`), processing logic (`engines`), and premium visual presentation (`system/visual`).
 
 Final Analysis generated on 2026-03-25. (Updated with Storage and Environment Configuration)
+
+## 11. MariaDB Backend Slice
+The repo now includes a minimal Node API for MariaDB under `server/`.
+
+### Run the API
+1. Copy `.env.example` to `.env`
+2. Update these values:
+   - `VITE_API_BASE_URL=http://localhost:4000`
+   - `API_PORT=4000`
+   - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`
+   - optional hardening: set both `API_ACCESS_KEY` and `VITE_API_ACCESS_KEY` to the same secret
+3. Create the database objects from `server/schema.sql`
+4. Start the API:
+   ```powershell
+   npm run api
+   ```
+5. Start the frontend in a second terminal:
+   ```powershell
+   npm run dev
+   ```
+6. Sign in, then open `Settings` or the `Control Panel` to verify:
+   - API mode is enabled
+   - API key is set if you configured one
+   - API health is online
+   - Daily / Task / Goal sync can retry cleanly
+
+### Endpoints
+- `GET /api/health`
+- `GET /api/daily-entries?userId=<id>`
+- `PUT /api/daily-entries/:date`
+- `GET /api/tasks?userId=<id>`
+- `PUT /api/tasks/:id`
+- `DELETE /api/tasks/:id?userId=<id>`
+- `GET /api/goals?userId=<id>`
+- `PUT /api/goals/:id`
+- `DELETE /api/goals/:id?userId=<id>`
+
+### Example save payload
+```json
+{
+  "userId": "demo-user",
+  "payload": {
+    "date": "2026-03-27",
+    "completed": false
+  }
+}
+```
+
+### Sync Model
+- If `VITE_API_BASE_URL` is missing, the app stays local-first.
+- If it is present, `daily`, `tasks`, and `goals` hydrate from MariaDB at boot.
+- Newer local data wins during retry/bootstrap reconciliation and is pushed back to MariaDB.
+- If `API_ACCESS_KEY` is set on the server, every frontend API call must send the matching `VITE_API_ACCESS_KEY`.
+
+### Auth Foundation
+The backend now also has a first auth-backed API slice:
+- `POST /api/auth/signup`
+- `POST /api/auth/signin`
+- `GET /api/auth/me`
+- `GET /api/auth/config`
+
+If `API_SESSION_SECRET` is set, signup/signin return a signed bearer token. This establishes the server-side identity layer needed before moving from client-supplied `userId` to backend-derived account identity.
+
+### Identity Enforcement
+- If `API_SESSION_SECRET` is not set, data routes still use the local/dev fallback and accept `userId`.
+- If `API_SESSION_SECRET` is set, data routes derive `userId` from the bearer token and stop trusting client-supplied account identity.
+- That applies to:
+  - daily entries
+  - tasks
+  - goals
+  - analytics history

@@ -4,8 +4,10 @@ import { customStorage } from './customStorage';
 import { AnalyticsHistory } from '../types';
 import { v4 as uuid } from 'uuid';
 import { STORAGE_NAMES } from '../config/identity';
+import { hydrateAnalyticsHistoryFromApi, isAnalyticsApiEnabled, saveAnalyticsHistoryBatchToApi, saveAnalyticsHistoryToApi } from '../lib/api/analyticsHistory';
+import { createInitialRemoteSyncState, markRemoteSyncError, markRemoteSyncLocal, markRemoteSyncStart, markRemoteSyncSuccess, type RemoteSyncState } from './remoteSync';
 
-interface AnalyticsState {
+interface AnalyticsState extends RemoteSyncState {
   history: AnalyticsHistory[];
   
   // 1. Log what the engine thinks WILL happen
@@ -16,26 +18,42 @@ interface AnalyticsState {
   
   // 3. Engine calls this to learn if it was right before
   getAdjustedConfidence: (insightKey: string, baseConfidence: number) => number;
+  hydrateFromRemote: () => Promise<void>;
+  retryRemoteSync: () => Promise<void>;
 }
 
 export const useAnalyticsStore = create<AnalyticsState>()(
   persist(
     (set, get) => ({
       history: [],
+      ...createInitialRemoteSyncState(),
 
       logPrediction: (insightKey, confidence, predictedImpact, date) => set((state) => {
         // Prevent duplicate predictions for the same insight on the same day
         const exists = state.history.find(h => h.date === date && h.insightKey === insightKey);
         if (exists) return state;
 
+        const nextHistory = {
+          id: uuid(),
+          date,
+          insightKey,
+          confidence,
+          predictedImpact
+        };
+
+        if (isAnalyticsApiEnabled()) {
+          set(markRemoteSyncStart());
+          void saveAnalyticsHistoryToApi(nextHistory).catch((error) => {
+            set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to sync analytics history'));
+          }).then(() => {
+            if (!get().remoteSyncError) {
+              set(markRemoteSyncSuccess());
+            }
+          });
+        }
+
         return {
-          history: [...state.history, {
-            id: uuid(),
-            date,
-            insightKey,
-            confidence,
-            predictedImpact
-          }]
+          history: [...state.history, nextHistory]
         };
       }),
 
@@ -49,6 +67,21 @@ export const useAnalyticsStore = create<AnalyticsState>()(
           }
           return h;
         });
+
+        if (isAnalyticsApiEnabled()) {
+          const changed = updated.filter((item, index) => item !== state.history[index]);
+          if (changed.length > 0) {
+            set(markRemoteSyncStart());
+            void saveAnalyticsHistoryBatchToApi(changed).catch((error) => {
+              set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to sync analytics resolution'));
+            }).then(() => {
+              if (!get().remoteSyncError) {
+                set(markRemoteSyncSuccess());
+              }
+            });
+          }
+        }
+
         return { history: updated };
       }),
 
@@ -72,6 +105,51 @@ export const useAnalyticsStore = create<AnalyticsState>()(
 
         // Clamp final output
         return Math.max(0, Math.min(1, currentConf));
+      },
+
+      hydrateFromRemote: async () => {
+        set(markRemoteSyncStart());
+        let remoteHistory: AnalyticsHistory[] | null = null;
+        try {
+          remoteHistory = await hydrateAnalyticsHistoryFromApi();
+        } catch (error) {
+          set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to hydrate analytics history'));
+        }
+
+        if (!remoteHistory) {
+          if (get().remoteSyncStatus === 'syncing') {
+            set(markRemoteSyncLocal());
+          }
+          return;
+        }
+
+        const localHistory = get().history;
+        const merged = new Map<string, AnalyticsHistory>();
+        remoteHistory.forEach((item) => merged.set(item.id, item));
+        localHistory.forEach((item) => merged.set(item.id, item));
+        const nextHistory = Array.from(merged.values()).sort((left, right) => left.date.localeCompare(right.date));
+        const localOnly = localHistory.filter((item) => !remoteHistory.some((remote) => remote.id === item.id));
+
+        set({ history: nextHistory });
+
+        if (localOnly.length > 0) {
+          try {
+            await saveAnalyticsHistoryBatchToApi(localOnly);
+          } catch (error) {
+            set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to push local analytics history'));
+            return;
+          }
+        }
+
+        set(markRemoteSyncSuccess());
+      },
+
+      retryRemoteSync: async () => {
+        if (!isAnalyticsApiEnabled()) {
+          set(markRemoteSyncLocal());
+          return;
+        }
+        await get().hydrateFromRemote();
       }
     }),
     {

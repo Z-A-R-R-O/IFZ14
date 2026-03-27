@@ -221,19 +221,22 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
                 disabled={currentQ === 0}
                 className="task-wizard-nav task-wizard-nav-back"
               >
-                <span className="task-wizard-nav-icon">&larr;</span>
+                <span className="task-wizard-nav-icon">BACK</span>
                 <span className="task-wizard-nav-text">Back</span>
               </button>
               <div className="wizard-label" style={{ justifySelf: 'center' }}>AUTO-DAY</div>
               {onCancel ? (
-                <button className="task-wizard-nav task-wizard-nav-close" onClick={() => { store.reset(); onCancel(); }}>
-                  <span className="task-wizard-nav-text">Close</span>
-                  <span className="task-wizard-nav-icon">&times;</span>
+                <button
+                  className="task-wizard-nav task-wizard-nav-close"
+                  onClick={() => { store.reset(); onCancel(); }}
+                  aria-label="Close auto-day"
+                >
+                  <span className="task-wizard-nav-icon">X</span>
                 </button>
               ) : <div />}
             </div>
             <div className="autoday-phase-line">STATE: ACTIVE</div>
-            <div className="wizard-label" style={{ marginBottom: '16px' }}>⚡ AUTO-DAY</div>
+            <div className="wizard-label" style={{ marginBottom: '16px' }}>AUTO-DAY</div>
             <div className="task-wizard-progress" style={{ justifyContent: 'center' }}>
               {store.questions.map((_, i) => (
                 <div key={i} className={`task-wizard-progress-segment ${i <= currentQ ? 'active' : 'inactive'}`} />
@@ -292,14 +295,14 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
               )}
 
               {q.type === 'select' && q.options && (
-                <div className="task-wizard-option-stack">
+                <div className="task-wizard-option-stack autoday-option-stack">
                   {q.options.map((opt, index) => (
                     <motion.button
                       key={opt}
                       initial={{ opacity: 0, scale: 0.985 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: 0.06 + index * 0.04, duration: 0.2 }}
-                      className="task-wizard-option"
+                      className="task-wizard-option autoday-option"
                       onClick={() => handleAnswer(q.id, opt)}
                     >
                       {opt}
@@ -346,7 +349,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
                     transition: 'color 0.4s ease',
                   }}
                 >
-                  {i < store.computingStep ? '✓' : i === store.computingStep ? '›' : '·'} {text}
+                  {i < store.computingStep ? 'DONE' : i === store.computingStep ? 'NOW' : 'WAIT'} {text}
                 </motion.div>
               ))}
             </div>
@@ -361,7 +364,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
                   const level = g.pressure >= 6 ? 'HIGH' : g.pressure >= 3 ? 'MEDIUM' : 'LOW';
                   return (
                     <div key={g.id} style={{ fontSize: '13px', color: '#fff', marginBottom: '4px', letterSpacing: '0.02em' }}>
-                      ⚠ {g.title} → {level} PRESSURE
+                      ALERT {g.title} {level} PRESSURE
                     </div>
                   );
                 })}
@@ -396,7 +399,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
 
           {/* Header */}
           <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.5 }}>
-            <div className="wizard-label" style={{ marginBottom: '8px' }}>⚡ YOUR OPTIMAL DAY</div>
+            <div className="wizard-label" style={{ marginBottom: '8px' }}>YOUR OPTIMAL DAY</div>
 
             {/* Day Type Badge */}
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
@@ -426,7 +429,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px' }}>
               <AnimatedMetric value={plan.prediction.expectedScore} className="metric-number-sm" />
               <span style={{ fontSize: '12px', letterSpacing: '0.15em', color: plan.prediction.trend === 'RISING' ? '#fff' : 'rgba(255,255,255,0.5)' }}>
-                {plan.prediction.trend} {plan.prediction.trend === 'RISING' ? '↑' : plan.prediction.trend === 'DECLINING' ? '↓' : '→'}
+                {plan.prediction.trend} {plan.prediction.trend === 'RISING' ? 'UP' : plan.prediction.trend === 'DECLINING' ? 'DOWN' : 'FLAT'}
               </span>
             </div>
             <div style={{ fontSize: '11px', color: '#555', marginTop: '4px', letterSpacing: '0.05em' }}>
@@ -478,7 +481,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
             initial={{ opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.35 }}
             className="autoday-plan-card"
           >
-            <div className="autoday-card-label">DEEP WORK — {plan.deepWorkSessions.length} SESSIONS</div>
+            <div className="autoday-card-label">DEEP WORK {plan.deepWorkSessions.length} SESSIONS</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {plan.deepWorkSessions.map((s, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -486,7 +489,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: '14px', color: '#fff', letterSpacing: '0.02em' }}>{s.taskTitle}</div>
                     <div style={{ fontSize: '11px', color: '#555', marginTop: '2px', letterSpacing: '0.05em' }}>
-                      {s.startTime} · {s.duration}m {(s.breakAfter || 0) > 0 ? `· ${s.breakAfter}m break` : ''}
+                      {s.startTime} TIME {s.duration}m {(s.breakAfter || 0) > 0 ? `BREAK ${s.breakAfter}m` : ''}
                     </div>
                   </div>
                 </div>
@@ -521,7 +524,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
             initial={{ opacity: 0, scale: 0.985 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.6 }}
             style={{ padding: '16px 20px', borderRadius: '8px', border: '1px dashed rgba(255,255,255,0.08)', marginBottom: '16px' }}
           >
-            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: '#555', marginBottom: '6px' }}>MINIMUM GUARANTEE — NO ZERO DAYS</div>
+            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: '#555', marginBottom: '6px' }}>MINIMUM GUARANTEE NO ZERO DAYS</div>
             <div style={{ fontSize: '12px', color: '#888' }}>
               {plan.minimum.deepWorkSessions > 0 ? `${plan.minimum.deepWorkSessions} deep work session` : 'Light mental work'} + {plan.minimum.gymIntensity} gym
             </div>
@@ -533,7 +536,7 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.65 }}
               style={{ padding: '12px 16px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '8px', marginBottom: '24px' }}
             >
-              <div style={{ fontSize: '11px', letterSpacing: '0.1em', color: '#fff', opacity: 0.8, textShadow: '0 0 8px rgba(255,255,255,0.1)' }}>REFLECTION REQUIRED — Decline trend detected</div>
+              <div style={{ fontSize: '11px', letterSpacing: '0.1em', color: '#fff', opacity: 0.8, textShadow: '0 0 8px rgba(255,255,255,0.1)' }}>REFLECTION REQUIRED DECLINE TREND DETECTED</div>
             </motion.div>
           )}
 
@@ -601,3 +604,4 @@ export default function AutoDayOverlay({ onComplete, onCancel }: AutoDayOverlayP
   // Fallback for idle or unknown states
   return null;
 }
+

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { format } from 'date-fns';
 import { useBiometricStore } from '../stores/biometricStore';
+import { useDailyStore } from '../stores/dailyStore';
 import {
   calcBMI,
   calcBMR,
@@ -18,7 +19,7 @@ import { type as typeStyles } from '../typography';
 import SystemSurface from '../ui/components/SystemSurface';
 import { fadeInUp } from '../ui/motion/presets';
 import AnimatedMetric from '../components/AnimatedMetric';
-import type { BiometricProfile, BodyHabit, WorkoutLogEntry } from '../types';
+import type { BiometricProfile, BodyHabit, DailyEntry, WorkoutLogEntry } from '../types';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -26,6 +27,12 @@ function clamp(value: number, min: number, max: number) {
 
 function formatShortDate(date: string) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(date));
+}
+
+function parseTimeToMinutes(value?: string) {
+  if (!value || !/^\d{2}:\d{2}$/.test(value)) return null;
+  const [hours, minutes] = value.split(':').map(Number);
+  return hours * 60 + minutes;
 }
 
 function formatDelta(value: number | null, unit = 'KG') {
@@ -408,6 +415,7 @@ export default function Biometrics() {
   const removeWeightEntry = useBiometricStore((state) => state.removeWeightEntry);
   const addWorkout = useBiometricStore((state) => state.addWorkout);
   const removeWorkout = useBiometricStore((state) => state.removeWorkout);
+  const dailyEntries = useDailyStore((state) => state.entries);
 
   const today = format(new Date(), 'yyyy-MM-dd');
 
@@ -474,6 +482,72 @@ export default function Biometrics() {
 
   const recentWeights = weightLog.slice(-6).reverse();
   const recentWorkouts = workoutLog.slice(-6).reverse();
+  const completedDailyEntries = useMemo(
+    () =>
+      (Object.values(dailyEntries) as DailyEntry[])
+        .filter((entry) => entry.completed)
+        .sort((left, right) => left.date.localeCompare(right.date)),
+    [dailyEntries]
+  );
+  const recentSleepEntries = useMemo(
+    () => completedDailyEntries.filter((entry) => (entry.totalSleepHours || 0) > 0).slice(-7),
+    [completedDailyEntries]
+  );
+  const sleepTarget = 7.5;
+  const sleepAverage = useMemo(
+    () =>
+      recentSleepEntries.length > 0
+        ? Math.round((recentSleepEntries.reduce((sum, entry) => sum + (entry.totalSleepHours || 0), 0) / recentSleepEntries.length) * 10) / 10
+        : 0,
+    [recentSleepEntries]
+  );
+  const sleepDebt = useMemo(
+    () =>
+      recentSleepEntries.length > 0
+        ? Math.round((sleepTarget * recentSleepEntries.length - recentSleepEntries.reduce((sum, entry) => sum + (entry.totalSleepHours || 0), 0)) * 10) / 10
+        : 0,
+    [recentSleepEntries]
+  );
+  const wakeStability = useMemo(() => {
+    const wakeMinutes = recentSleepEntries
+      .map((entry) => parseTimeToMinutes(entry.actualWakeTime))
+      .filter((value): value is number => value !== null);
+    if (wakeMinutes.length < 2) return null;
+    const diffs = wakeMinutes.slice(1).map((value, index) => Math.abs(value - wakeMinutes[index]));
+    const avgDiff = diffs.reduce((sum, value) => sum + value, 0) / diffs.length;
+    return clamp(Math.round(100 - avgDiff), 0, 100);
+  }, [recentSleepEntries]);
+  const sleepCycleState = useMemo(() => {
+    if (recentSleepEntries.length === 0) return { label: 'UNTRACKED', tone: 'rgba(255,255,255,0.52)' };
+    if (sleepAverage < 6.8) return { label: 'SLEEP DEBT', tone: 'rgba(255,132,132,0.92)' };
+    if (sleepAverage > 8.2) return { label: 'OVERSHOOT', tone: 'rgba(255,212,138,0.92)' };
+    if (Math.abs(sleepAverage - sleepTarget) <= 0.3) return { label: 'TARGET LOCK', tone: 'rgba(168,219,188,0.92)' };
+    return { label: 'DRIFT', tone: 'rgba(255,255,255,0.82)' };
+  }, [recentSleepEntries.length, sleepAverage]);
+  const sleepAnalysis = useMemo(() => {
+    if (recentSleepEntries.length === 0) {
+      return [
+        'Sleep analysis activates after you log sleep inside Daily.',
+        'Target is set to 7.5 hours so the body page can measure drift cleanly.',
+      ];
+    }
+
+    const lines = [
+      Math.abs(sleepAverage - sleepTarget) <= 0.3
+        ? 'Sleep is holding near 7.5h, which supports cleaner recovery and steadier execution.'
+        : sleepAverage < sleepTarget
+          ? `Average sleep is ${sleepAverage}h, below the 7.5h target and likely adding recovery drag.`
+          : `Average sleep is ${sleepAverage}h, above the 7.5h target and worth checking against energy quality.`,
+      wakeStability != null && wakeStability >= 85
+        ? 'Wake timing is stable, so your sleep cycle is compounding instead of drifting.'
+        : 'Wake timing is inconsistent, so the cycle is noisier even when total sleep looks acceptable.',
+      sleepDebt > 0.5
+        ? `${sleepDebt}h of recent sleep debt is still open. Closing that gap should improve body-state stability.`
+        : 'No meaningful sleep debt is building across the recent window.',
+    ];
+
+    return lines;
+  }, [recentSleepEntries.length, sleepAverage, wakeStability, sleepDebt]);
 
   return (
     <div className="biometrics-page">
@@ -513,6 +587,31 @@ export default function Biometrics() {
           </div>
         </SystemSurface>
       </motion.section>
+
+      <SystemSurface as="section" interactive={false} delay={0.1} className="biometrics-surface">
+        <div className="biometrics-section-head">
+          <div>
+            <div className={typeStyles.label}>Sleep Cycle Effects</div>
+            <div className="biometrics-section-title">Sleep is analyzed against a 7.5 hour maintenance target.</div>
+          </div>
+          <div className="biometrics-mini-grid">
+            <MetricTile label="AVG SLEEP" value={sleepAverage || '--'} suffix={sleepAverage ? 'H' : undefined} detail="Recent 7 logged days" />
+            <MetricTile label="TARGET DRIFT" value={recentSleepEntries.length ? Math.abs(Math.round((sleepAverage - sleepTarget) * 10) / 10) : '--'} suffix={recentSleepEntries.length ? 'H' : undefined} detail="Distance from 7.5h" />
+            <MetricTile label="WAKE STABILITY" value={wakeStability ?? '--'} suffix={wakeStability != null ? '%' : undefined} detail="Wake-time consistency" />
+            <MetricTile label="CYCLE STATE" value={sleepCycleState.label} detail="Recovery pattern" />
+          </div>
+        </div>
+
+        <div className="biometrics-divider" />
+
+        <div className="biometrics-insight-list">
+          {sleepAnalysis.map((line) => (
+            <div key={line} className="goal-insight-line" style={{ color: sleepCycleState.tone }}>
+              {line}
+            </div>
+          ))}
+        </div>
+      </SystemSurface>
 
       <motion.div {...fadeInUp(0.04, 8)} className="biometrics-tab-rail">
         {TABS.map((tab) => (

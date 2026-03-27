@@ -4,6 +4,7 @@ import { useDailyStore } from '../stores/dailyStore';
 import { useGoalStore } from '../stores/goalStore';
 import { useTaskStore } from '../stores/taskStore';
 import { useBiometricStore } from '../stores/biometricStore';
+import { useAnalyticsStore } from '../stores/analyticsStore';
 import { calculateScore, calculateScoreBreakdown } from '../engines/scoreEngine';
 import { detectPattern } from '../engines/patternEngine';
 import { calculateStreaks } from '../engines/streakEngine';
@@ -15,7 +16,6 @@ import type { DailyEntry } from '../types';
 import {
   getBodySignal,
   getConditionSignal,
-  getDeepWorkMinutes,
   getDeepWorkSignal,
   getExecutionSignal,
   getIntegritySignal,
@@ -28,58 +28,14 @@ import { formatHeadingText, type as typeStyles } from '../typography';
 import AnimatedMetric from '../components/AnimatedMetric';
 import { dashboardSequence } from '../motion';
 import SystemSurface, { type SurfaceVariant } from '../ui/components/SystemSurface';
-import { uiMotion } from '../ui/motion/presets';
 import { format, parseISO, subDays } from 'date-fns';
 import { v4 as uuidv4 } from 'uuid';
 import { normalizeModeName } from '../lib/modeName';
 
-/* ─── Animation Variants ─── */
-
-
-
-/* ─── Motion Config ─── */
 const motionConfig = {
-  fast: uiMotion.fast,
-  smooth: uiMotion.smooth,
-  slow: uiMotion.slow,
+  smooth: { duration: 0.32, ease: [0.24, 0.9, 0.2, 1] as const },
+  slow: { duration: 0.6, ease: [0.24, 0.9, 0.2, 1] as const },
 };
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function buildLinePath(values: number[], width: number, height: number, padding: number) {
-  if (values.length === 0) return '';
-  const maxValue = Math.max(...values, 100);
-  const minValue = Math.min(...values, 0);
-  const range = Math.max(maxValue - minValue, 1);
-
-  return values
-    .map((value, index) => {
-      const x = padding + (index * (width - padding * 2)) / Math.max(values.length - 1, 1);
-      const y = height - padding - ((value - minValue) / range) * (height - padding * 2);
-      return `${index === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(' ');
-}
-
-function buildPoints(values: number[], width: number, height: number, padding: number) {
-  if (values.length === 0) return [];
-  const maxValue = Math.max(...values, 100);
-  const minValue = Math.min(...values, 0);
-  const range = Math.max(maxValue - minValue, 1);
-
-  return values.map((value, index) => ({
-    x: padding + (index * (width - padding * 2)) / Math.max(values.length - 1, 1),
-    y: height - padding - ((value - minValue) / range) * (height - padding * 2),
-    value,
-    index,
-  }));
-}
-
-
-
-/* ─── Glass Surface (Replaces Card) ─── */
 
 function GlassSurface({ children, variant = 'base', className = '', delay = 0, style = {} }: { children: React.ReactNode; i?: number; variant?: SurfaceVariant; className?: string; delay?: number; style?: React.CSSProperties }) {
   return (
@@ -88,63 +44,6 @@ function GlassSurface({ children, variant = 'base', className = '', delay = 0, s
     </SystemSurface>
   );
 }
-
-/* ─── Tooltip ─── */
-
-/* ─── Signal Bar HUD ─── */
-
-function SignalBarMap({ label, value, max }: { label: string; value: number; max: number }) {
-  const fillWidth = `${Math.min(100, Math.max(0, (value / max) * 100))}%`;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-      <span className={typeStyles.label} style={{ width: '48px', opacity: 0.36 }}>{label}</span>
-      <div style={{ flex: 1, height: '3px', background: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.08), rgba(255,255,255,0.08) 1px, transparent 1px, transparent 12px)', overflow: 'hidden' }}>
-        <motion.div
-          layout
-          initial={{ width: 0, opacity: 0.72 }}
-          animate={{ width: fillWidth, opacity: 1 }}
-          transition={{ duration: 0.28, ease: [0.24, 0.9, 0.2, 1] }}
-          style={{ height: '100%' }}
-          className="signal-bar-fill"
-        />
-      </div>
-      <AnimatedMetric value={value} className="metric-number-xs text-white" style={{ width: '32px', textAlign: 'right', opacity: 0.92 }} />
-    </div>
-  );
-}
-
-/* ─── Diagnostic Row ─── */
-
-function DiagnosticRow({ label, value, state }: { label: string; value: string; state: 'critical' | 'stable' | 'none' }) {
-  const isStatus = label === 'STATUS';
-  const intensityStyle = {
-    opacity: isStatus ? 0.96 : state === 'critical' ? 1 : state === 'stable' ? 0.7 : 0.4
-  };
-
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <motion.div
-          animate={state === 'critical' ? { opacity: [0.4, 0.85, 0.4] } : state === 'stable' ? { opacity: 0.7 } : { opacity: 0.2 }}
-          transition={{ repeat: Infinity, duration: 1.8 }}
-          style={{
-            width: '6px', height: '6px', borderRadius: '50%',
-            background: '#fff',
-            boxShadow: state === 'critical' ? '0 0 4px rgba(255,255,255,0.45)' : 'none',
-            opacity: intensityStyle.opacity
-          }}
-        />
-        <span className={typeStyles.label} style={{ opacity: isStatus ? 0.72 : 0.48 }}>{label}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <span className="font-mono text-white" style={{ fontSize: isStatus ? '13px' : '12px', letterSpacing: isStatus ? '0.12em' : '0.08em', opacity: intensityStyle.opacity, fontWeight: isStatus || state === 'critical' ? 600 : 400 }}>{value}</span>
-        {state === 'stable' && <motion.span initial={{ x: -2 }} animate={{ x: 0 }} transition={{ repeat: Infinity, repeatType: 'reverse', duration: 1 }} style={{ color: '#fff', opacity: 0.7, fontSize: '10px' }}>↗</motion.span>}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Hero Radial Score ─── */
 
 function HeroRadialScore({ score, execution, intensity }: { score: number; execution: number; intensity: number }) {
   const radius = 72;
@@ -158,7 +57,6 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
       className="parallax-layer-3"
       style={{ position: 'relative', width: '184px', height: '184px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto' }}
     >
-      {/* Outer Ring & Glow */}
       <svg width="184" height="184" style={{ position: 'absolute', transform: 'rotate(-90deg)' }}>
         <circle cx="92" cy="92" r={radius} fill="none" stroke="rgba(255,255,255,0.045)" strokeWidth="3" />
         {Array.from({ length: tickCount }).map((_, index) => {
@@ -182,7 +80,12 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
           );
         })}
         <motion.circle
-          cx="92" cy="92" r={radius} fill="none" stroke="#fff" strokeWidth="4"
+          cx="92"
+          cy="92"
+          r={radius}
+          fill="none"
+          stroke="#fff"
+          strokeWidth="4"
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
           animate={{ strokeDashoffset }}
@@ -191,7 +94,6 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
           style={{ strokeDasharray: `${circumference * 0.22} ${circumference * 0.04}` }}
         />
       </svg>
-      {/* Inner Core */}
       <motion.div
         animate={{ opacity: [0.97, 1, 0.97] }}
         transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut' }}
@@ -206,7 +108,6 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
           <AnimatedMetric value={score} className="score-number" style={{ textShadow: 'none' }} />
         </motion.div>
       </motion.div>
-      {/* Execution Energy Pulses */}
       <div style={{ position: 'absolute', bottom: '-24px', width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
         {[...Array(5)].map((_, i) => (
           <motion.div
@@ -221,60 +122,8 @@ function HeroRadialScore({ score, execution, intensity }: { score: number; execu
   );
 }
 
-/* ─── Waveform Setup ─── */
 
-function SignalFeedWaveform({ value }: { value: number }) {
-  const isActive = value > 0;
-  return (
-    <motion.svg
-      width="100%" height="60"
-      preserveAspectRatio="none"
-      className="wave"
-      style={{ position: 'absolute', bottom: 0, left: 0, opacity: isActive ? 0.15 : 0.03, filter: 'blur(0.3px)' }}
-    >
-      <motion.path
-        d={isActive ? "M0,45 Q20,15 40,45 T80,45 T120,25 T160,45 T200,35 L200,60 L0,60 Z" : "M0,58 L200,58 L200,60 L0,60 Z"}
-        fill="none"
-        stroke="rgba(255,255,255,0.8)"
-        strokeWidth="2"
-        initial={{ pathLength: 0, opacity: 0 }}
-        animate={{
-          pathLength: 1,
-          opacity: isActive ? 0.52 : 0.18,
-        }}
-        transition={{
-          pathLength: motionConfig.slow,
-          opacity: motionConfig.smooth,
-        }}
-      />
-      <motion.path
-        d={isActive ? "M0,45 Q20,15 40,45 T80,45 T120,25 T160,45 T200,35 L200,60 L0,60 Z" : "M0,58 L200,58 L200,60 L0,60 Z"}
-        fill="rgba(255,255,255,0.1)"
-        initial={{ opacity: 0 }}
-        animate={{
-          opacity: isActive ? [0.04, 0.07, 0.04] : [0.01, 0.02, 0.01],
-        }}
-        transition={{
-          opacity: { duration: isActive ? 6 : 7.2, repeat: Infinity, ease: 'easeInOut' },
-        }}
-      />
-    </motion.svg>
-  );
-}
 
-/* ─── Chart Placeholder (Signal Lost) ─── */
-
-function ChartPlaceholder({ label = 'NO SIGNAL DETECTED', message = 'Awaiting input stream' }: { label?: string; message?: string }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '8px' }}>
-      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <motion.div animate={{ opacity: [0.28, 0.72, 0.28], scale: [1, 1.08, 1] }} transition={{ repeat: Infinity, duration: 1.6 }} style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'rgba(255,255,255,0.72)' }} />
-        <span style={{ fontSize: '11px', letterSpacing: '0.2em', color: 'rgba(255,255,255,0.72)' }}>{label}</span>
-      </div>
-      <span style={{ fontSize: '11px', color: '#5A5A5A', letterSpacing: '0.1em' }}>{message}</span>
-    </div>
-  );
-}
 
 function CommandPill({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'critical' | 'positive' }) {
   return (
@@ -341,67 +190,7 @@ function FeedLine({ tag, text, tone = 'default' }: { tag: string; text: string; 
   );
 }
 
-function SignalTimelineGraph({
-  series,
-  primaryLabel,
-  secondaryLabel,
-}: {
-  series: Array<{ date: string; primary: number; secondary: number; primaryText: string; secondaryText: string }>;
-  primaryLabel: string;
-  secondaryLabel: string;
-}) {
-  const width = 760;
-  const height = 220;
-  const padding = 28;
-  const primaryPath = buildLinePath(series.map((point) => point.primary), width, height, padding);
-  const secondaryPath = buildLinePath(series.map((point) => point.secondary), width, height, padding);
-  const primaryPoints = buildPoints(series.map((point) => point.primary), width, height, padding);
-  const secondaryPoints = buildPoints(series.map((point) => point.secondary), width, height, padding);
-  const latestPoint = series[series.length - 1];
-  const labelIndexes = new Set([0, Math.max(0, Math.floor((series.length - 1) / 2)), Math.max(0, series.length - 1)]);
 
-  return (
-    <div className="dashboard-graph-wrap">
-      <div className="dashboard-graph-legend">
-        <div className="dashboard-graph-legend-item">
-          <span className="dashboard-graph-dot is-primary" />
-          <span className="dashboard-graph-legend-label">{primaryLabel}</span>
-          <span className="dashboard-graph-legend-value">{latestPoint?.primaryText ?? '--'}</span>
-        </div>
-        <div className="dashboard-graph-legend-item">
-          <span className="dashboard-graph-dot is-secondary" />
-          <span className="dashboard-graph-legend-label">{secondaryLabel}</span>
-          <span className="dashboard-graph-legend-value">{latestPoint?.secondaryText ?? '--'}</span>
-        </div>
-      </div>
-      <div className="dashboard-graph-stage">
-        <svg viewBox={`0 0 ${width} ${height}`} className="dashboard-graph-svg" preserveAspectRatio="none" aria-hidden="true">
-          {Array.from({ length: 4 }).map((_, index) => {
-            const y = padding + (index * (height - padding * 2)) / 3;
-            return <line key={index} x1={padding} y1={y} x2={width - padding} y2={y} className="dashboard-graph-grid-line" />;
-          })}
-          <path d={secondaryPath} className="dashboard-graph-path is-secondary" />
-          <path d={primaryPath} className="dashboard-graph-path is-primary" />
-          {secondaryPoints.map((point) => (
-            <circle key={`secondary-${point.index}`} cx={point.x} cy={point.y} r="3.2" className="dashboard-graph-point is-secondary" />
-          ))}
-          {primaryPoints.map((point) => (
-            <circle key={`primary-${point.index}`} cx={point.x} cy={point.y} r="3.8" className="dashboard-graph-point is-primary" />
-          ))}
-        </svg>
-      </div>
-      <div className="dashboard-graph-axis">
-        {series.map((point, index) => (
-          <span key={`${point.date}-${index}`} className={`dashboard-graph-axis-label${labelIndexes.has(index) ? ' is-visible' : ''}`}>
-            {labelIndexes.has(index) ? point.date : ''}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-void SignalFeedWaveform;
 
 /* ═══════════════════════════════════════
    DASHBOARD — Fully Dynamic
@@ -413,6 +202,7 @@ export default function Dashboard() {
   const goals = useGoalStore((s) => s.goals);
   const tasks = useTaskStore((s) => s.tasks);
   const bodyHabits = useBiometricStore((s) => s.habits);
+  const getAdjustedConfidence = useAnalyticsStore((s) => s.getAdjustedConfidence);
 
   const getActiveTemplateStructure = useDailyStore(s => s.getActiveTemplateStructure);
   const getActiveTemplateName = useDailyStore(s => s.getActiveTemplateName);
@@ -443,11 +233,6 @@ export default function Dashboard() {
     return allCompleted.filter((e: any) => e.date >= cutoff);
   }, [allCompleted]);
 
-  // Last 30 days for score evolution
-  const last30Days = useMemo(() => {
-    const cutoff = format(subDays(new Date(), 30), 'yyyy-MM-dd');
-    return allCompleted.filter((e: any) => e.date >= cutoff);
-  }, [allCompleted]);
 
   /* ─── Engine Calculations (all from real data) ─── */
 
@@ -465,7 +250,10 @@ export default function Dashboard() {
   const streaks = useMemo(() => calculateStreaks(allCompleted), [allCompleted]);
   const risk = useMemo(() => assessRisk(allCompleted), [allCompleted]);
   const suggestions = useMemo(() => generateSuggestions(allCompleted, streaks), [allCompleted, streaks]);
-  const insights = useMemo(() => detectCausation(allCompleted), [allCompleted]);
+  const insights = useMemo(
+    () => detectCausation(allCompleted, { confidenceAdjuster: getAdjustedConfidence }),
+    [allCompleted, getAdjustedConfidence]
+  );
   const failures = useMemo(() => analyzeFailures(allCompleted), [allCompleted]);
   const prediction = useMemo(() => predictOutcome(todayEntry || {}, tasks), [todayEntry, tasks]);
   const actions = useMemo(() => generateActions(insights, failures), [insights, failures]);
@@ -526,38 +314,7 @@ export default function Dashboard() {
 
   /* ─── Chart Data (last 7 days for DW, last 30 for score) ─── */
 
-  const graphEntries = useMemo(() => last30Days.slice(-10), [last30Days]);
-  const focusGraphSeries = useMemo(
-    () =>
-      graphEntries.map((entry) => {
-        const minutes = getDeepWorkMinutes(entry);
-        return {
-          date: format(parseISO(entry.date), 'MM/dd'),
-          primary: clamp(getDeepWorkSignal(entry), 0, 100),
-          secondary: clamp(Math.round((minutes / 180) * 100), 0, 100),
-          primaryText: `${getDeepWorkSignal(entry)}%`,
-          secondaryText: `${minutes}m`,
-        };
-      }),
-    [graphEntries]
-  );
-  const scoreGraphSeries = useMemo(
-    () =>
-      graphEntries.map((entry) => {
-        const score = calculateScore(entry).score;
-        const production = getProductionSignal(entry);
-        return {
-          date: format(parseISO(entry.date), 'MM/dd'),
-          primary: clamp(score, 0, 100),
-          secondary: clamp(production, 0, 100),
-          primaryText: `${score}%`,
-          secondaryText: `${production}%`,
-        };
-      }),
-    [graphEntries]
-  );
-  const hasFocusGraph = focusGraphSeries.length >= 2;
-  const hasScoreGraph = scoreGraphSeries.length >= 2;
+
 
   /* ─── Display Values (today + fallback to weekly avg) ─── */
 
@@ -575,11 +332,7 @@ export default function Dashboard() {
       : weeklyAvg ? `${weeklyAvg.gymDays}/7` : '—';
 
   // Best active streak
-  const bestStreak = Math.max(streaks.gym, streaks.deepWork, streaks.earlyWake, streaks.highScore);
-  const bestStreakLabel = bestStreak === streaks.gym ? 'BODY'
-    : bestStreak === streaks.deepWork ? 'FOCUS'
-      : bestStreak === streaks.earlyWake ? 'WAKE'
-        : 'SCORE';
+
   const resolvedBodyDisplay = todayEntry && hasBodyRoutineConfigured(todayEntry)
     ? `${getBodySignal(todayEntry)}%`
     : weeklyAvg ? `${weeklyAvg.bodyDays}/7` : bodyDisplay;
@@ -750,32 +503,6 @@ export default function Dashboard() {
         </GlassSurface>
       </section>
 
-      {/* ── PHASE 8 PREDICTIVE INTELLIGENCE (FAST DEPTH) ── */}
-      {false && (prediction.expectedScore > 0 || actions.length > 0) && (
-        <div style={{ ...depth.fast, display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '24px', zIndex: 1, position: 'relative' }}>
-          <GlassSurface i={0} delay={dashboardSequence.cards} variant="elevated" style={{ background: 'rgba(255,255,255,0.02)' }}>
-            <div className={typeStyles.label} style={{ marginBottom: '16px' }}>EXPECTED TODAY</div>
-            <div>
-              <AnimatedMetric value={prediction.expectedScore} className="metric-number-sm text-white" />
-              <div className="font-mono text-[11px] uppercase text-white" style={{ opacity: prediction.trend === 'RISING' ? 1 : prediction.trend === 'FALLING' ? 0.4 : 0.7, marginTop: '4px' }}>
-                ({prediction.trend})
-              </div>
-            </div>
-          </GlassSurface>
-          <GlassSurface i={1} delay={dashboardSequence.cards + 0.08} variant="elevated" style={{ border: `1px solid rgba(255,255,255,${visual.border})`, boxShadow: `0 0 ${20 * visual.glow}px rgba(255,255,255,0.1)` }}>
-            <div className={typeStyles.label} style={{ marginBottom: '16px', opacity: 0.7 }}>SYSTEM DIRECTIVES</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {actions.map((act, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '14px', marginTop: '-2px' }}>•</span>
-                  <span className={`${typeStyles.body} text-white`} style={{ lineHeight: 1.4 }}>{act}</span>
-                </div>
-              ))}
-            </div>
-          </GlassSurface>
-        </div>
-      )}
-
       {/* ── PRIMARY ZONE (HERO - FAST DEPTH) ── */}
       <section className="dashboard-summary-grid" style={{ ...depth.fast, zIndex: 1, position: 'relative' }}>
         {summaryCards.map((item, index) => (
@@ -849,46 +576,6 @@ export default function Dashboard() {
 
         {/* LEFT COMPUTE COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {false && (
-          <GlassSurface i={3} delay={dashboardSequence.cards + 0.12} className="dashboard-scan-panel">
-            <div className={typeStyles.label} style={{ marginBottom: '18px' }}>DIAGNOSTICS</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <DiagnosticRow label="STATUS" value={String(displayState)} state={displayState === 'CRITICAL' ? 'critical' : displayState === 'STABLE' ? 'stable' : 'none'} />
-              <DiagnosticRow label="TREND" value={pattern.trend} state={pattern.trend === 'DECLINING' ? 'critical' : pattern.trend === 'RISING' ? 'stable' : 'none'} />
-              <DiagnosticRow label="STREAK" value={bestStreak > 0 ? `${bestStreak}D ${bestStreakLabel}` : '—'} state={bestStreak > 3 ? 'stable' : 'none'} />
-              <DiagnosticRow label="RISK LEVEL" value={risk.level === 'LOW' ? 'NONE' : risk.level} state={risk.level === 'HIGH' ? 'critical' : risk.level === 'LOW' ? 'stable' : 'none'} />
-            </div>
-          </GlassSurface>
-          )}
-
-          {false && (
-          <GlassSurface i={8} delay={dashboardSequence.cards + 0.18} className="dashboard-scan-panel">
-            <div className={typeStyles.label} style={{ marginBottom: '18px' }}>ACTIVE TARGET</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {activeGoalSignals.length > 0 ? activeGoalSignals.map(({ goal, computed }) => (
-                <div key={goal.id} className="dashboard-goal-row">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', marginBottom: '8px', alignItems: 'baseline' }}>
-                    <span className="font-mono" style={{ fontSize: '12px', letterSpacing: '0.08em', color: 'rgba(255,255,255,0.88)' }}>{goal.title.replace(/\s+/g, '_').toUpperCase()}</span>
-                    <span className="font-mono" style={{ fontSize: '12px', letterSpacing: '0.08em', color: 'rgba(255,255,255,0.92)' }}><AnimatedMetric value={computed.progress} pulse={false} />%</span>
-                  </div>
-                  <div className="dashboard-hard-bar">
-                    <motion.div
-                      initial={{ width: 0 }}
-                      animate={{ width: `${computed.progress}%` }}
-                      transition={{ duration: 0.36, ease: [0.24, 0.9, 0.2, 1] }}
-                      className="dashboard-hard-bar-fill"
-                      style={{ opacity: computed.riskLevel === 'high' ? 0.38 : computed.riskLevel === 'medium' ? 0.66 : 0.92 }}
-                    />
-                  </div>
-                </div>
-              )) : (
-                <div className={`${typeStyles.body} text-white`} style={{ opacity: 0.52 }}>
-                  No active goals locked.
-                </div>
-              )}
-            </div>
-          </GlassSurface>
-          )}
 
           {/* SYSTEM EVOLUTION LOG (PHASE 4) */}
           {systemEvolutionLogs.length > 0 && (
@@ -948,63 +635,8 @@ export default function Dashboard() {
               </div>
             </GlassSurface>
           )}
+
         </div>
-
-        {false && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {/* QUICK METRICS HUD */}
-          <GlassSurface i={4} delay={dashboardSequence.hud} className="dashboard-scan-panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <span className={typeStyles.label}>HUD METRICS</span>
-              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>{todayEntry ? 'TODAY' : weeklyAvg ? 'AVG' : '—'}</span>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <SignalBarMap label="EXEC" value={todayBreakdown?.execution ?? weeklyAvg?.execution ?? 0} max={100} />
-              <SignalBarMap label="COND" value={todayBreakdown?.condition ?? weeklyAvg?.condition ?? 0} max={100} />
-              <SignalBarMap label="INTEG" value={todayBreakdown?.integrity ?? weeklyAvg?.integrity ?? 0} max={100} />
-              <SignalBarMap label="FOCUS" value={todayEntry ? getDeepWorkSignal(todayEntry) : weeklyAvg?.focus ?? 0} max={100} />
-            </div>
-          </GlassSurface>
-
-          {/* DEEP WORK EVOLUTION */}
-          <GlassSurface i={5} delay={dashboardSequence.hud + 0.08} className="dashboard-scan-panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <span className={typeStyles.label}>FOCUS SIGNAL</span>
-              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>LAST 10 DAYS</span>
-            </div>
-            <div className="dashboard-chart-shell dashboard-chart-shell--graph">
-              {hasFocusGraph ? (
-                <SignalTimelineGraph
-                  series={focusGraphSeries}
-                  primaryLabel="Focus"
-                  secondaryLabel="Minutes"
-                />
-              ) : (
-                <ChartPlaceholder />
-              )}
-            </div>
-          </GlassSurface>
-
-          {/* SCORE EVOLUTION */}
-          <GlassSurface i={6} delay={dashboardSequence.hud + 0.16} className="dashboard-scan-panel">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
-              <span className={typeStyles.label}>TIMELINE</span>
-              <span className="font-mono text-[10px] uppercase" style={{ color: 'rgba(255,255,255,0.2)' }}>LAST 10 DAYS</span>
-            </div>
-            <div className="dashboard-chart-shell dashboard-chart-shell--graph">
-              {hasScoreGraph ? (
-                <SignalTimelineGraph
-                  series={scoreGraphSeries}
-                  primaryLabel="Score"
-                  secondaryLabel="Production"
-                />
-              ) : (
-                <ChartPlaceholder label="BASELINE FORMING..." message="Awaiting score history" />
-              )}
-            </div>
-          </GlassSurface>
-        </div>
-        )}
       </div>
 
       {/* ── EMPTY STATE ── */}
@@ -1031,3 +663,7 @@ export default function Dashboard() {
     </div>
   );
 }
+
+
+
+

@@ -96,7 +96,7 @@ export function DeepWorkSessionRow({
     >
       <div className="daily-session-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', paddingTop: '4px' }}>
         <span className="font-mono text-[11px] uppercase daily-session-time-value" style={{ fontWeight: 600, color: badge.color }}>
-          {session.startTime ? `${session.startTime}${endTime ? ` â€“ ${endTime}` : ''}` : `SESSION ${idx + 1}`}
+          {session.startTime ? `${session.startTime}${endTime ? ` TO ${endTime}` : ''}` : `SESSION ${idx + 1}`}
         </span>
         <span className="font-mono text-[10px] uppercase daily-session-state-hint" style={{ color: badge.color, opacity: 0.8, textShadow: badge.textShadow }}>
           {badge.label}
@@ -191,7 +191,7 @@ export function DeepWorkSessionRow({
                           {task.title}
                         </span>
                         <span className="font-mono text-[11px]" style={{ color: '#555', marginLeft: '8px', letterSpacing: '0.08em' }}>
-                          {String(task.priority || '').toUpperCase()} Â· {task.estimatedTime}M
+                          {String(task.priority || '').toUpperCase()} TIME {task.estimatedTime}M
                         </span>
                       </div>
                     ))}
@@ -204,7 +204,7 @@ export function DeepWorkSessionRow({
           {linked && (
             <div className="daily-session-meta" style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '-4px' }}>
               <span className="font-mono text-[10px] uppercase daily-session-meta-item" style={{ color: '#5A5A5A', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                â±
+                TIME
                 <input
                   type="number"
                   value={session.duration || 60}
@@ -235,7 +235,7 @@ export function DeepWorkSessionRow({
 
                 return (
                   <span className="goal-impact-badge daily-session-goal-link font-primary text-[10px]" style={{ color: '#4ade80', letterSpacing: '0.04em', background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.15)', padding: '3px 8px', borderRadius: '4px', marginLeft: 'auto' }}>
-                    â†’ {linkedGoal.title}{impactStr}
+                    GOAL {linkedGoal.title}{impactStr}
                   </span>
                 );
               })()}
@@ -282,7 +282,7 @@ export function DeepWorkSessionRow({
             onClick={() => setShowActions(!showActions)}
             title="Actions"
           >
-            â‹¯
+            MENU
           </button>
 
           <AnimatePresence>

@@ -9,6 +9,8 @@ import { useTaskStore } from './taskStore';
 import { useAnalyticsStore } from './analyticsStore';
 import { STORAGE_NAMES } from '../config/identity';
 import { useBiometricStore } from './biometricStore';
+import { hydrateDailyEntriesFromApi, isDailyApiEnabled, saveDailyEntriesBatchToApi, saveDailyEntryToApi } from '../lib/api/dailyEntries';
+import { createInitialRemoteSyncState, markRemoteSyncError, markRemoteSyncLocal, markRemoteSyncStart, markRemoteSyncSuccess, type RemoteSyncState } from './remoteSync';
 
 export const BUILTIN_TEMPLATES: Record<string, TemplateDefinition> = {
   execution: {
@@ -57,7 +59,7 @@ export interface SystemLog {
   reason: string;
 }
 
-interface DailyState {
+interface DailyState extends RemoteSyncState {
   entries: Record<string, DailyEntry>;
   customTemplates: TemplateDefinition[];
   activeTemplateId: string | null;
@@ -82,6 +84,23 @@ interface DailyState {
   getAllEntries: () => DailyEntry[];
   getRecentEntries: (count: number) => DailyEntry[];
   getTodayEntry: () => DailyEntry;
+  hydrateFromRemote: () => Promise<void>;
+  retryRemoteSync: () => Promise<void>;
+}
+
+function pickNewerEntry(localEntry: DailyEntry | undefined, remoteEntry: DailyEntry) {
+  if (!localEntry) return remoteEntry;
+  return new Date(remoteEntry.updatedAt).getTime() >= new Date(localEntry.updatedAt).getTime() ? remoteEntry : localEntry;
+}
+
+function getEntriesNeedingRemoteSync(localEntries: Record<string, DailyEntry>, remoteEntries: Record<string, DailyEntry>) {
+  return Object.values(localEntries)
+    .filter((localEntry) => {
+      const remoteEntry = remoteEntries[localEntry.date];
+      if (!remoteEntry) return true;
+      return new Date(localEntry.updatedAt).getTime() > new Date(remoteEntry.updatedAt).getTime();
+    })
+    .sort((left, right) => left.date.localeCompare(right.date));
 }
 
 export const useDailyStore = create<DailyState>()(
@@ -92,6 +111,7 @@ export const useDailyStore = create<DailyState>()(
       activeTemplateId: null,
       adaptationMode: 'assist',
       systemEvolutionLogs: [],
+      ...createInitialRemoteSyncState(),
 
       setActiveTemplate: (id: string | null) => set({ activeTemplateId: id }),
       setAdaptationMode: (mode: 'manual' | 'assist' | 'auto') => set({ adaptationMode: mode }),
@@ -143,16 +163,30 @@ export const useDailyStore = create<DailyState>()(
       },
 
       updateEntry: (date: string, updates: Partial<DailyEntry>) => {
+        let nextEntry: DailyEntry | null = null;
         set((state: DailyState) => {
           const struct = state.getActiveTemplateStructure() || undefined;
           const existing = state.entries[date] || createEmptyEntry(date, struct);
+          nextEntry = { ...existing, ...updates, updatedAt: new Date().toISOString() };
           return {
             entries: {
               ...state.entries,
-              [date]: { ...existing, ...updates, updatedAt: new Date().toISOString() },
+              [date]: nextEntry,
             },
           };
         });
+        if (nextEntry) {
+          if (!isDailyApiEnabled()) return;
+          set(markRemoteSyncStart());
+          void saveDailyEntryToApi(nextEntry).catch((error) => {
+            set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to sync daily entry'));
+            console.warn('Failed to sync daily entry to API', error);
+          }).then(() => {
+            if (!get().remoteSyncError) {
+              set(markRemoteSyncSuccess());
+            }
+          });
+        }
       },
 
       completeEntry: (date: string) => {
@@ -168,22 +202,38 @@ export const useDailyStore = create<DailyState>()(
         const subScores = calculateSubScores(entry, scoreOptions);
         const breakdown = calculateScoreBreakdown(entry, scoreOptions);
 
+        const completedEntry = {
+          ...entry,
+          ...subScores,
+          averageScore: score,
+          executionScore: breakdown.execution,
+          conditionScore: breakdown.condition,
+          integrityScore: breakdown.integrity,
+          systemScore: breakdown.systemScore,
+          completed: true,
+          updatedAt: new Date().toISOString(),
+        };
+
         set((s: DailyState) => ({
           entries: {
             ...s.entries,
-            [date]: {
-              ...entry,
-              ...subScores,
-              averageScore: score,
-              executionScore: breakdown.execution,
-              conditionScore: breakdown.condition,
-              integrityScore: breakdown.integrity,
-              systemScore: breakdown.systemScore,
-              completed: true,
-              updatedAt: new Date().toISOString(),
-            },
+            [date]: completedEntry,
           },
         }));
+
+        if (!isDailyApiEnabled()) {
+          return { score, state: systemState };
+        }
+
+        set(markRemoteSyncStart());
+        void saveDailyEntryToApi(completedEntry).catch((error) => {
+          set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to sync completed daily entry'));
+          console.warn('Failed to sync completed daily entry to API', error);
+        }).then(() => {
+          if (!get().remoteSyncError) {
+            set(markRemoteSyncSuccess());
+          }
+        });
 
         const prevEntries = get().getAllEntries();
         const prevEntry = prevEntries.find(e => e.date < date);
@@ -239,6 +289,54 @@ export const useDailyStore = create<DailyState>()(
       getTodayEntry: () => {
         const today = format(new Date(), 'yyyy-MM-dd');
         return get().getEntry(today);
+      },
+
+      hydrateFromRemote: async () => {
+        set(markRemoteSyncStart());
+        let remoteEntries: Record<string, DailyEntry> | null = null;
+        try {
+          remoteEntries = await hydrateDailyEntriesFromApi();
+        } catch (error) {
+          set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to hydrate daily entries'));
+          console.warn('Failed to hydrate daily entries from API', error);
+        }
+        if (!remoteEntries) {
+          if (get().remoteSyncStatus === 'syncing') {
+            set(markRemoteSyncLocal());
+          }
+          return;
+        }
+
+        const localEntries = get().entries;
+        const entriesToPush = getEntriesNeedingRemoteSync(localEntries, remoteEntries);
+
+        set((state: DailyState) => {
+          const nextEntries = { ...state.entries };
+          Object.values(remoteEntries).forEach((remoteEntry) => {
+            nextEntries[remoteEntry.date] = pickNewerEntry(nextEntries[remoteEntry.date], remoteEntry);
+          });
+          return { entries: nextEntries };
+        });
+
+        if (entriesToPush.length > 0) {
+          try {
+            await saveDailyEntriesBatchToApi(entriesToPush);
+          } catch (error) {
+            set(markRemoteSyncError(error instanceof Error ? error.message : 'Failed to push local daily entries'));
+            console.warn('Failed to push local daily entries to API', error);
+            return;
+          }
+        }
+
+        set(markRemoteSyncSuccess());
+      },
+
+      retryRemoteSync: async () => {
+        if (!isDailyApiEnabled()) {
+          set(markRemoteSyncLocal());
+          return;
+        }
+        await get().hydrateFromRemote();
       },
     }),
     {

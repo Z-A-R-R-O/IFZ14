@@ -1,7 +1,12 @@
 import { motion } from 'framer-motion';
 import { useAuthStore } from '../stores/authStore';
 import { usePrefsStore } from '../stores/prefsStore';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useDailyStore } from '../stores/dailyStore';
+import { useTaskStore } from '../stores/taskStore';
+import { useGoalStore } from '../stores/goalStore';
+import { useAnalyticsStore } from '../stores/analyticsStore';
+import { buildApiHeaders } from '../lib/api/client';
 import { exportCSV, exportReport, deleteAllData } from '../utils/exportUtils';
 import { AnimatePresence } from 'framer-motion';
 import ConfirmOverlay from '../components/ConfirmOverlay';
@@ -74,11 +79,28 @@ export default function Settings() {
   const animations = usePrefsStore((s) => s.animations);
   const toggleAutoSave = usePrefsStore((s) => s.toggleAutoSave);
   const toggleAnimations = usePrefsStore((s) => s.toggleAnimations);
+  const retryDailySync = useDailyStore((s) => s.retryRemoteSync);
+  const dailySyncStatus = useDailyStore((s) => s.remoteSyncStatus);
+  const dailyLastSyncAt = useDailyStore((s) => s.lastRemoteSyncAt);
+  const retryTaskSync = useTaskStore((s) => s.retryRemoteSync);
+  const taskSyncStatus = useTaskStore((s) => s.remoteSyncStatus);
+  const taskLastSyncAt = useTaskStore((s) => s.lastRemoteSyncAt);
+  const retryGoalSync = useGoalStore((s) => s.retryRemoteSync);
+  const goalSyncStatus = useGoalStore((s) => s.remoteSyncStatus);
+  const goalLastSyncAt = useGoalStore((s) => s.lastRemoteSyncAt);
+  const retryAnalyticsSync = useAnalyticsStore((s) => s.retryRemoteSync);
+  const analyticsSyncStatus = useAnalyticsStore((s) => s.remoteSyncStatus);
+  const analyticsLastSyncAt = useAnalyticsStore((s) => s.lastRemoteSyncAt);
 
   const [showConfirm, setShowConfirm] = useState(false);
   const [exportStatus, setExportStatus] = useState('');
   const [nameInput, setNameInput] = useState(user?.name || '');
   const [nameSaved, setNameSaved] = useState(false);
+  const [syncStatus, setSyncStatus] = useState('');
+  const [apiHealth, setApiHealth] = useState<'checking' | 'online' | 'offline' | 'disabled'>('disabled');
+  const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  const apiEnabled = Boolean(apiBaseUrl);
+  const apiKeyEnabled = Boolean((import.meta.env.VITE_API_ACCESS_KEY || '').trim());
 
   const handleNameSave = () => {
     updateName(nameInput);
@@ -95,6 +117,50 @@ export default function Settings() {
       setTimeout(() => setExportStatus(''), 2000);
     }, 400);
   };
+
+  const formatSyncTime = (value: string | null) =>
+    value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never';
+
+  const handleRetryAllSync = async () => {
+    setSyncStatus('RETRYING ALL');
+    await retryAnalyticsSync();
+    await retryGoalSync();
+    await retryTaskSync();
+    await retryDailySync();
+    setSyncStatus('SYNC COMPLETE');
+    setTimeout(() => setSyncStatus(''), 2000);
+  };
+
+  useEffect(() => {
+    if (!apiEnabled) {
+      setApiHealth('disabled');
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkHealth = async () => {
+      setApiHealth('checking');
+      try {
+        const response = await fetch(`${apiBaseUrl.replace(/\/$/, '')}/api/health`, {
+          headers: buildApiHeaders(),
+        });
+        if (!cancelled) {
+          setApiHealth(response.ok ? 'online' : 'offline');
+        }
+      } catch {
+        if (!cancelled) {
+          setApiHealth('offline');
+        }
+      }
+    };
+
+    void checkHealth();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBaseUrl, apiEnabled]);
 
   return (
     <>
@@ -157,6 +223,40 @@ export default function Settings() {
               {exportStatus}
             </motion.div>
           )}
+        </motion.section>
+
+        <motion.section variants={fadeUp}>
+          <div className="t-meta" style={{ marginBottom: '20px' }}>SYNC</div>
+          <TextRow label="API MODE" value={apiEnabled ? 'ENABLED' : 'LOCAL ONLY'} />
+          <TextRow label="API KEY" value={apiKeyEnabled ? 'SET' : 'OPEN'} />
+          <TextRow
+            label="API HEALTH"
+            value={
+              apiHealth === 'checking'
+                ? 'CHECKING'
+                : apiHealth === 'online'
+                  ? 'ONLINE'
+                  : apiHealth === 'offline'
+                    ? 'OFFLINE'
+                    : 'DISABLED'
+            }
+          />
+          <TextRow label="DAILY" value={`${dailySyncStatus.toUpperCase()} · ${formatSyncTime(dailyLastSyncAt)}`} />
+          <TextRow label="TASKS" value={`${taskSyncStatus.toUpperCase()} · ${formatSyncTime(taskLastSyncAt)}`} />
+          <TextRow label="GOALS" value={`${goalSyncStatus.toUpperCase()} · ${formatSyncTime(goalLastSyncAt)}`} />
+          <TextRow label="ANALYTICS" value={`${analyticsSyncStatus.toUpperCase()} · ${formatSyncTime(analyticsLastSyncAt)}`} />
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <ActionButton label="RETRY ALL SYNC" onClick={() => void handleRetryAllSync()} />
+          </div>
+          {syncStatus ? (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              style={{ fontSize: '12px', color: '#5A5A5A', letterSpacing: '0.1em', marginTop: '12px' }}
+            >
+              {syncStatus}
+            </motion.div>
+          ) : null}
         </motion.section>
 
         {/* Danger Zone */}

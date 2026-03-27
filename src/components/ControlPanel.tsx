@@ -2,6 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { useDailyStore } from '../stores/dailyStore';
+import { useGoalStore } from '../stores/goalStore';
+import { useTaskStore } from '../stores/taskStore';
 import { exportCSV, exportReport, deleteAllData } from '../utils/exportUtils';
 import ConfirmOverlay from './ConfirmOverlay';
 
@@ -52,8 +55,68 @@ export default function ControlPanel() {
   const lock = useAuthStore((s) => s.lock);
   const signOut = useAuthStore((s) => s.signOut);
   const isLocked = useAuthStore((s) => s.isLocked);
+  const remoteSyncStatus = useDailyStore((s) => s.remoteSyncStatus);
+  const remoteSyncError = useDailyStore((s) => s.remoteSyncError);
+  const lastRemoteSyncAt = useDailyStore((s) => s.lastRemoteSyncAt);
+  const retryRemoteSync = useDailyStore((s) => s.retryRemoteSync);
+  const taskSyncStatus = useTaskStore((s) => s.remoteSyncStatus);
+  const taskSyncError = useTaskStore((s) => s.remoteSyncError);
+  const taskLastSyncAt = useTaskStore((s) => s.lastRemoteSyncAt);
+  const retryTaskSync = useTaskStore((s) => s.retryRemoteSync);
+  const goalSyncStatus = useGoalStore((s) => s.remoteSyncStatus);
+  const goalSyncError = useGoalStore((s) => s.remoteSyncError);
+  const goalLastSyncAt = useGoalStore((s) => s.lastRemoteSyncAt);
+  const retryGoalSync = useGoalStore((s) => s.retryRemoteSync);
   const navigate = useNavigate();
   const sideOffset = 'max(24px, calc((100vw - 1100px) / 2 + 24px))';
+
+  const syncStatusLabel =
+    remoteSyncStatus === 'syncing'
+      ? 'SYNCING'
+      : remoteSyncStatus === 'synced'
+        ? 'SYNCED'
+        : remoteSyncStatus === 'error'
+          ? 'ERROR'
+          : 'LOCAL';
+
+  const syncStatusSub =
+    remoteSyncStatus === 'error'
+      ? remoteSyncError || 'Remote sync failed'
+      : lastRemoteSyncAt
+        ? `Last sync ${new Date(lastRemoteSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : 'Daily entries are running in local-first mode';
+
+  const taskStatusLabel =
+    taskSyncStatus === 'syncing'
+      ? 'SYNCING'
+      : taskSyncStatus === 'synced'
+        ? 'SYNCED'
+        : taskSyncStatus === 'error'
+          ? 'ERROR'
+          : 'LOCAL';
+
+  const taskStatusSub =
+    taskSyncStatus === 'error'
+      ? taskSyncError || 'Task sync failed'
+      : taskLastSyncAt
+        ? `Last sync ${new Date(taskLastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : 'Tasks are running in local-first mode';
+
+  const goalStatusLabel =
+    goalSyncStatus === 'syncing'
+      ? 'SYNCING'
+      : goalSyncStatus === 'synced'
+        ? 'SYNCED'
+        : goalSyncStatus === 'error'
+          ? 'ERROR'
+          : 'LOCAL';
+
+  const goalStatusSub =
+    goalSyncStatus === 'error'
+      ? goalSyncError || 'Goal sync failed'
+      : goalLastSyncAt
+        ? `Last sync ${new Date(goalLastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : 'Goals are running in local-first mode';
 
   const handleClickOutside = useCallback((e: MouseEvent) => {
     if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
@@ -173,6 +236,42 @@ export default function ControlPanel() {
 
             <section className="control-panel-section">
               <SectionLabel text="DATA" />
+              <PanelItem
+                label={feedback['Daily Sync'] || 'Daily Sync'}
+                sub={syncStatusSub}
+                icon="DB"
+                status={syncStatusLabel}
+                caution={remoteSyncStatus === 'error'}
+                onClick={() =>
+                  handleAction('Daily Sync', 'RETRYING', () => {
+                    void retryRemoteSync();
+                  }, 120)
+                }
+              />
+              <PanelItem
+                label={feedback['Task Sync'] || 'Task Sync'}
+                sub={taskStatusSub}
+                icon="TSK"
+                status={taskStatusLabel}
+                caution={taskSyncStatus === 'error'}
+                onClick={() =>
+                  handleAction('Task Sync', 'RETRYING', () => {
+                    void retryTaskSync();
+                  }, 120)
+                }
+              />
+              <PanelItem
+                label={feedback['Goal Sync'] || 'Goal Sync'}
+                sub={goalStatusSub}
+                icon="GOL"
+                status={goalStatusLabel}
+                caution={goalSyncStatus === 'error'}
+                onClick={() =>
+                  handleAction('Goal Sync', 'RETRYING', () => {
+                    void retryGoalSync();
+                  }, 120)
+                }
+              />
               <PanelItem
                 label="Export Report"
                 sub="Compile weekly report"

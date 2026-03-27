@@ -1,9 +1,13 @@
 import { DailyEntry, DayTemplate, Task } from '../types';
 import { CausalInsight, FailureAnalysis, PerformanceDriver, CausalChain, PredictiveState } from '../types';
-import { useAnalyticsStore } from '../stores/analyticsStore';
 import { computeAllGoals } from './goalEngine';
 import { calculateScore, calculateScoreBreakdown } from './scoreEngine';
 import { createEmptyEntry } from '../types';
+import { buildReportsModel } from '../lib/reports/reportModel';
+
+export interface CausationOptions {
+  confidenceAdjuster?: (insightKey: string, baseConfidence: number) => number;
+}
 
 // ─── UTILS ───
 export function avg(arr: number[]): number {
@@ -117,9 +121,10 @@ export function limitedAnalysis(entries: DailyEntry[]): CausalInsight[] {
 }
 
 // ─── 1. CAUSATION ENGINE ───
-export function detectCausation(entries: DailyEntry[]): CausalInsight[] {
+export function detectCausation(entries: DailyEntry[], options: CausationOptions = {}): CausalInsight[] {
   const MIN_DAYS = 5;
   if (entries.length < MIN_DAYS) return limitedAnalysis(entries);
+  const adjustConfidence = options.confidenceAdjuster ?? ((_: string, baseConfidence: number) => baseConfidence);
 
   // Extract raw series directly from entries
   // Fill missing with averages or 0 to keep alignment
@@ -197,7 +202,7 @@ export function detectCausation(entries: DailyEntry[]): CausalInsight[] {
 
     // Run pure math confidence through the self-correcting memory loop
     const insightKey = `${pair.cause}→${pair.effect}|lag${bestLag}`;
-    conf = useAnalyticsStore.getState().getAdjustedConfidence(insightKey, conf);
+    conf = adjustConfidence(insightKey, conf);
 
     // Hard filters
     if (conf >= 0.45 && Math.abs(bestR) >= 0.25) {
@@ -551,41 +556,30 @@ export function generateWeeklyReport(
   goals: any[],
   tasks: Task[]
 ): string {
-  if (entries.length < 7) {
+  const report = buildReportsModel({ entries, goals, tasks });
+
+  if (report.collectedDays < 7) {
     return 'IFZ14 SYSTEM — INSUFFICIENT DATA\nLog at least 7 days to generate a weekly report.\n';
   }
 
-  const currentWeek = entries.slice(-7);
-  const previousWeek = entries.slice(-14, -7);
-
-  const failures = analyzeFailures(currentWeek);
-  const verdict = analyzeWeeklyPerformance(currentWeek, previousWeek, failures);
-  const insights = detectCausation(entries).filter(i => i.confidence >= 0.4);
-  const goalImpacts = calculateGoalImpact(goals, tasks, currentWeek, previousWeek);
-  
-  const currentSleep = avg(currentWeek.map(e => e.totalSleepHours || 0));
-  const currentEnergy = avg(currentWeek.map(e => e.efficiencyRating ?? e.energyLevel ?? 0));
-  
-  const getDW = (arr: DailyEntry[]) => arr.map(getDeepWorkVolume);
-  
-  const currentDW = Math.round(avg(getDW(currentWeek)) / 60 * 10) / 10;
-  const currentScore = Math.round(avg(currentWeek.map(getEntryScore)));
-
-  const plan = generateStrategy(insights, failures, verdict.mode, currentDW * 60, currentSleep);
+  const insights = detectCausation(report.allEntries).filter(i => i.confidence >= 0.4);
+  const currentSleep = avg(report.recentWindow.map(e => e.totalSleepHours || 0));
+  const currentEnergy = avg(report.recentWindow.map(e => e.efficiencyRating ?? e.energyLevel ?? 0));
+  const plan = generateStrategy(insights, report.failures, report.weekly.mode, report.deepHours * 60, currentSleep);
 
   let doc = `IFZ14 SYSTEM — WEEKLY INTELLIGENCE REPORT\n`;
   doc += `Generated: ${new Date().toISOString().split('T')[0]}\n`;
   doc += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
   doc += `[ VERDICT ]\n`;
-  doc += `Status: ${verdict.verdict}\n`;
-  doc += `Score:  ${currentScore} (${verdict.trend})\n`;
-  doc += `Mode:   ${verdict.mode}\n`;
-  if (verdict.primaryIssue) doc += `Issue:  ${verdict.primaryIssue}\n`;
+  doc += `Status: ${report.weekly.verdict}\n`;
+  doc += `Score:  ${report.averageScore} (${report.weekly.trend})\n`;
+  doc += `Mode:   ${report.weekly.mode}\n`;
+  if (report.weekly.primaryIssue) doc += `Issue:  ${report.weekly.primaryIssue}\n`;
   doc += `\n`;
 
   doc += `[ METRICS (7-Day Avg) ]\n`;
-  doc += `Deep Work: ${currentDW}h\n`;
+  doc += `Deep Work: ${report.deepHours}h\n`;
   doc += `Energy:    ${currentEnergy.toFixed(1)}/10\n`;
   doc += `Sleep:     ${currentSleep.toFixed(1)}h\n`;
   doc += `\n`;
@@ -598,9 +592,9 @@ export function generateWeeklyReport(
   plan.avoid.forEach(a => doc += ` → ${a}\n`);
   doc += `\n`;
 
-  if (goalImpacts.length > 0) {
+  if (report.goalImpact.length > 0) {
     doc += `[ GOAL IMPACT ]\n`;
-    goalImpacts.forEach(g => {
+    report.goalImpact.forEach(g => {
       doc += `${g.title}: +${g.progressDelta}% progress (+${g.contributionDelta} pts)\n`;
     });
     doc += `\n`;

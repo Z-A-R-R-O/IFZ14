@@ -910,7 +910,7 @@ export default function Goals() {
   const [showWizard, setShowWizard] = useState(false);
   const [hoveredGoalId, setHoveredGoalId] = useState<string | null>(null);
   const [lockedGoalId, setLockedGoalId] = useState<string | null>(null);
-  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTimeoutRef = useRef<number | null>(null);
 
   const allEntries = useMemo(
     () => Object.values(entries).filter(entry => entry.completed) as DailyEntry[],

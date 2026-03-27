@@ -350,6 +350,7 @@ export function CreateTaskWizard({ onClose }: { onClose: (taskId?: string) => vo
       />
 
       <div
+        className="task-wizard-shell"
         style={{
           position: 'relative',
           width: '100%',
@@ -373,7 +374,7 @@ export function CreateTaskWizard({ onClose }: { onClose: (taskId?: string) => vo
               disabled={step === 0}
               aria-label="Go back one step"
             >
-              <span className="task-wizard-nav-icon">â†</span>
+              <span className="task-wizard-nav-icon">BACK</span>
               <span className="task-wizard-nav-text">Back</span>
             </motion.button>
             <div className={typeStyles.identityLabel} style={{ opacity: 0.62 }}>
@@ -388,7 +389,7 @@ export function CreateTaskWizard({ onClose }: { onClose: (taskId?: string) => vo
               onClick={handleClose}
               aria-label="Close task creation"
             >
-              <span className="task-wizard-nav-icon">Ã—</span>
+              <span className="task-wizard-nav-icon">X</span>
             </motion.button>
           </div>
           <div className="task-wizard-progress" style={{ justifyContent: 'center' }}>

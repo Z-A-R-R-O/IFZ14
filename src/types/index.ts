@@ -278,6 +278,7 @@ export interface Task {
   completed: boolean;
   createdAt: string;
   completedAt?: string;
+  updatedAt?: string;
 
   // Auto-split tracking
   parentTaskId?: string;
@@ -309,6 +310,7 @@ export interface Goal {
 
   // Meta (stored)
   createdAt: string;
+  updatedAt?: string;
 }
 
 /**

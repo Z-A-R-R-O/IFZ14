@@ -956,10 +956,28 @@ body {
   gap: 10px !important;
 }
 
+.task-wizard-shell .task-wizard-option,
 .reflection-option-stack .task-wizard-option {
   text-align: center;
   align-items: center;
   justify-content: center;
+  font-family: var(--font-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.25;
+  min-height: 58px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+
+.task-wizard-shell .task-wizard-option-kicker {
+  text-align: center;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+.reflection-option-stack .task-wizard-option {
   min-height: 62px;
 }
 
@@ -3564,6 +3582,25 @@ a {
   flex-direction: column;
   align-items: center;
   gap: 10px;
+}
+
+.autoday-option-stack {
+  width: 100%;
+  max-width: 420px;
+  align-items: center;
+}
+
+.autoday-option {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-family: var(--font-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1.25;
+  min-height: 54px;
+  padding: 0 18px;
 }
 
 .autoday-slider-track {
