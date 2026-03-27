@@ -77,7 +77,7 @@ export default function Daily() {
             className="daily-date-row"
           >
             <button type="button" className="daily-date-arrow" onClick={() => shiftDay(-1)} aria-label="Previous day">
-              PREV
+              ←
             </button>
             <div className="daily-date-label-group">
               <p className={typeStyles.label} style={{ marginBottom: 0 }}>
@@ -86,7 +86,7 @@ export default function Daily() {
               {isToday(new Date(selectedDate)) ? <span className="daily-date-today">TODAY</span> : null}
             </div>
             <button type="button" className="daily-date-arrow" onClick={() => shiftDay(1)} aria-label="Next day">
-              NEXT
+              →
             </button>
           </motion.div>
           <div style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}>
@@ -155,7 +155,41 @@ export default function Daily() {
       ) : (
         <>
           {/* ── DYNAMIC STREAM (FAST DEPTH) ── */}
-          <motion.div
+          {isBlank ? (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...motionTiming.medium, delay: dashboardSequence.footer * 0.5 }}
+              style={{ minHeight: '48vh', display: 'grid', placeItems: 'center', position: 'relative', zIndex: 'var(--z-base)' }}
+            >
+              <div
+                className="analytics-card daily-system-panel"
+                style={{
+                  width: '100%',
+                  maxWidth: '560px',
+                  padding: '32px 28px',
+                  border: `1px solid rgba(255,255,255,${visual.border})`,
+                  display: 'grid',
+                  gap: '18px',
+                  textAlign: 'center',
+                }}
+              >
+                <div className={typeStyles.label}>DAY NOT LOADED</div>
+                <h2 className="heading-mode text-white" style={{ margin: 0, fontSize: 'clamp(24px, 4vw, 36px)' }}>
+                  Select Day Template
+                </h2>
+                <p className={typeStyles.body} style={{ margin: 0, color: 'rgba(255,255,255,0.62)' }}>
+                  This date does not have an active day structure yet. Choose a template manually or generate one with Auto-Day.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: '12px', flexWrap: 'wrap' }}>
+                  <SystemButton variant="primary" onClick={handleOpenBuilder}>SELECT TEMPLATE</SystemButton>
+                  <SystemButton variant="ghost" onClick={handleOpenAutoDay}>AUTO-DAY</SystemButton>
+                </div>
+              </div>
+            </motion.div>
+          ) : null}
+
+          {!isBlank ? <motion.div
             key={selectedDate}
             className="daily-flow-stack"
             initial={{ opacity: 0 }}
@@ -214,7 +248,7 @@ export default function Daily() {
                 );
               })}
             </AnimatePresence>
-          </motion.div>
+          </motion.div> : null}
 
           {/* ── LIVE SYSTEM OUTPUT ── */}
           <motion.div
@@ -239,8 +273,6 @@ export default function Daily() {
     </div>
   );
 }
-
-
 
 
 

@@ -150,7 +150,7 @@ export function StableReflectionBlock({ entry, update, visual }: StableReflectio
                     disabled={step === 0}
                     className="task-wizard-nav task-wizard-nav-back"
                   >
-                    <span className="task-wizard-nav-icon">BACK</span>
+                    <span className="task-wizard-nav-icon">←</span>
                     <span className="task-wizard-nav-text">Back</span>
                   </button>
                   <div className="wizard-label" style={{ justifySelf: 'center' }}>REFLECTION</div>

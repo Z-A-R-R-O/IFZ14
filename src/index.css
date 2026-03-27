@@ -1484,6 +1484,8 @@ textarea.ifz14-input {
   padding: 24px;
   display: grid;
   gap: 18px;
+  height: min(560px, 72vh);
+  align-content: start;
 }
 
 .dashboard-deck-head {
@@ -1544,6 +1546,13 @@ textarea.ifz14-input {
 .dashboard-feed-stack {
   display: grid;
   gap: 12px;
+}
+
+.dashboard-feed-stack {
+  max-height: 148px;
+  overflow-y: auto;
+  padding-right: 6px;
+  align-content: start;
 }
 
 .dashboard-breakdown-row {

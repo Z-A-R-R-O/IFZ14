@@ -282,7 +282,7 @@ export function DeepWorkSessionRow({
             onClick={() => setShowActions(!showActions)}
             title="Actions"
           >
-            MENU
+            |||
           </button>
 
           <AnimatePresence>

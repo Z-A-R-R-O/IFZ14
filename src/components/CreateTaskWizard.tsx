@@ -374,7 +374,7 @@ export function CreateTaskWizard({ onClose }: { onClose: (taskId?: string) => vo
               disabled={step === 0}
               aria-label="Go back one step"
             >
-              <span className="task-wizard-nav-icon">BACK</span>
+              <span className="task-wizard-nav-icon">←</span>
               <span className="task-wizard-nav-text">Back</span>
             </motion.button>
             <div className={typeStyles.identityLabel} style={{ opacity: 0.62 }}>
