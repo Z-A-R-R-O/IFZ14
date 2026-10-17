@@ -46,7 +46,9 @@ Create a root **.env** file from the supplied **.env.example**. The example cont
 
 Important settings include **DB_HOST**, **DB_PORT**, **DB_USER**, **DB_PASSWORD**, **DB_NAME**, **API_PORT**, **API_CORS_ORIGIN**, and optional **API_ACCESS_KEY**, **API_SESSION_SECRET**, **VITE_API_BASE_URL**, and **VITE_API_ACCESS_KEY**.
 
-If the API session secret is not configured, the API uses a development-oriented identity fallback that accepts a user ID from the request. Do not expose that mode to untrusted users.
+**Security note:** any variable prefixed with **VITE_** is exposed to browser code. Therefore, **VITE_API_ACCESS_KEY is not a secret**, and a shared key embedded in the frontend is only a development/demo gate—not production authentication. Do not rely on it to protect a public API.
+
+If the API session secret is not configured, the API uses a development-oriented identity fallback that accepts a user ID from the request. Do not expose that mode to untrusted users. Production use needs a dedicated server-side authentication, authorization, and deployment review.
 
 ## Verification commands
 
